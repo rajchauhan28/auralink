@@ -1,0 +1,13 @@
+# Protect source code
+/src/
+/ui/
+# Protect assets
+/assets/
+# Protect config files
+/Cargo.toml
+/Cargo.lock
+/build.rs
+/auralink.desktop
+/PKGBUILD
+/README.md
+/.gitignore
