@@ -7,18 +7,19 @@ arch=('x86_64')
 url="https://github.com/rajchauhan28/auralink"
 license=('MIT')
 depends=('gcc-libs' 'glibc' 'networkmanager' 'qt6-base')
-makedepends=('cargo')
-source=()
+makedepends=('cargo' 'git')
+# Use the local git repository to avoid directory collisions
+source=("${pkgname}::git+file://${startdir}")
+sha256sums=('SKIP')
 
 build() {
-  # Use a hidden build directory to avoid collision with 'src' or 'pkg'
-  # $startdir is the directory where the PKGBUILD is located
-  cd "$startdir"
+  cd "${pkgname}"
   cargo build --release
 }
 
 package() {
-  install -Dm755 "$startdir/target/release/auralink" "${pkgdir}/usr/bin/auralink"
-  install -Dm644 "$startdir/auralink.desktop" "${pkgdir}/usr/share/applications/auralink.desktop"
-  install -Dm644 "$startdir/assets/auralink.svg" "${pkgdir}/usr/share/icons/hicolor/scalable/apps/auralink.svg"
+  cd "${pkgname}"
+  install -Dm755 "target/release/auralink" "${pkgdir}/usr/bin/auralink"
+  install -Dm644 "auralink.desktop" "${pkgdir}/usr/share/applications/auralink.desktop"
+  install -Dm644 "assets/auralink.svg" "${pkgdir}/usr/share/icons/hicolor/scalable/apps/auralink.svg"
 }
