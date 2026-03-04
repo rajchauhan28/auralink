@@ -13,7 +13,7 @@ sha256sums=('SKIP') # Update with actual hash on release
 
 build() {
   cd "${pkgname}-${pkgver}"
-  cargo build --release --locked
+  cargo build --release
 }
 
 package() {
