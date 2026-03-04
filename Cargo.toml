@@ -3,6 +3,20 @@ name = "auralink"
 version = "0.1.0"
 edition = "2024"
 
+[package.metadata.deb]
+name = "auralink"
+maintainer = "rajchauhan28"
+copyright = "2026, rajchauhan28"
+license-file = ["README.md", "0"]
+depends = "libc6, libstdc++6, libgcc-s1"
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/auralink", "usr/bin/auralink", "755"],
+    ["auralink.desktop", "usr/share/applications/auralink.desktop", "644"],
+    ["assets/auralink.svg", "usr/share/icons/hicolor/scalable/apps/auralink.svg", "644"],
+]
+
 [dependencies]
 slint = "1.15.1"
 serde = { version = "1.0.228", features = ["derive"] }
