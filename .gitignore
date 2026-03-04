@@ -1,0 +1,15 @@
+# Rust
+/target
+Cargo.lock
+
+# AppImage / LinuxDeploy
+/AppDir
+/*.AppImage
+/linuxdeploy*
+
+# Editor / System
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.log

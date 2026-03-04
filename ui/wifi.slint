@@ -1,0 +1,703 @@
+import { ScrollView, LineEdit, Button, CheckBox } from "std-widgets.slint";
+
+export struct VpnItem {
+    name: string,
+    active: bool,
+    type_name: string,
+}
+
+export struct NetworkItem {
+    ssid: string,
+    signal: int,
+    security: string,
+    connected: bool,
+    saved: bool,
+    ping: string,
+    icon: string,
+    icon_color: color,
+}
+
+export global Palette {
+    in-out property <color> background: #141418;
+    in-out property <color> card-bg: #202024;
+    in-out property <color> accent: #3584e4;
+    in-out property <color> foreground: #ffffff;
+    in-out property <color> secondary-fg: #aaaaaa;
+    in-out property <color> separator: #333333;
+}
+
+component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: true;
+    in property <bool> enabled: true;
+    in property <bool> danger: false;
+    callback clicked;
+    
+    height: 24px;
+    background: primary ? (enabled ? Palette.accent : Palette.accent.with-alpha(0.5)) : transparent;
+    border-radius: 6px;
+    border-width: primary ? 0 : 1px;
+    border-color: danger ? #ed333b.with-alpha(0.3) : Palette.accent.with-alpha(0.3);
+    
+    states [
+        hover when touch.has-hover && enabled : {
+            background: primary ? Palette.accent.brighter(10%) : (danger ? #ed333b.with-alpha(0.15) : Palette.accent.with-alpha(0.15));
+        }
+        pressed when touch.pressed && enabled : {
+            background: primary ? Palette.accent.darker(10%) : (danger ? #ed333b.with-alpha(0.25) : Palette.accent.with-alpha(0.25));
+        }
+    ]
+
+    touch := TouchArea {
+        clicked => { if (enabled) { root.clicked(); } }
+    }
+
+    Text {
+        text: root.text;
+        color: primary ? Palette.background : (danger ? #ed333b : Palette.accent);
+        font-size: 11px;
+        font-weight: 700;
+    }
+}
+
+component ThemeToggle inherits Rectangle {
+    in property <string> text;
+    in-out property <bool> checked;
+    callback toggled(bool);
+
+    height: 24px;
+    
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 36px;
+                height: 18px;
+                background: root.checked ? Palette.accent : Palette.foreground.with-alpha(0.1);
+                border-radius: 9px;
+                
+                Rectangle {
+                    x: root.checked ? 19px : 2px;
+                    y: 2px;
+                    width: 14px;
+                    height: 14px;
+                    background: white;
+                    border-radius: 7px;
+                    animate x { duration: 150ms; easing: ease-in-out; }
+                }
+            }
+        }
+        
+        if (root.text != "") : Text {
+            text: root.text;
+            color: Palette.foreground;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+    }
+    
+    TouchArea {
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}
+
+component SpeedGraph inherits Rectangle {
+    in property <[float]> download_points;
+    in property <[float]> upload_points;
+    in property <float> max_val;
+    
+    background: Palette.card-bg.darker(30%);
+    border-radius: 8px;
+    clip: true;
+
+    for p[i] in download_points : Rectangle {
+        x: (60 - download_points.length + i) * (parent.width / 60);
+        y: parent.height - (p / max_val * parent.height);
+        width: parent.width / 60 + 0.5px;
+        height: p / max_val * parent.height;
+        background: @linear-gradient(180deg, #00bfff66 0%, #00bfff11 100%);
+    }
+
+    for p[idx] in upload_points : Rectangle {
+        x: (60 - upload_points.length + idx) * (parent.width / 60);
+        y: parent.height - (p / max_val * parent.height);
+        width: parent.width / 60 + 0.5px;
+        height: p / max_val * parent.height;
+        background: @linear-gradient(180deg, #ff450066 0%, #ff450011 100%);
+    }
+}
+
+component MenuItem inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> danger: false;
+    callback clicked;
+
+    height: 32px;
+    border-radius: 6px;
+    background: touch.has-hover ? (danger ? #ed333b.with-alpha(0.1) : Palette.foreground.with-alpha(0.05)) : transparent;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+        
+        Text {
+            text: root.icon;
+            color: danger ? #ed333b : Palette.secondary-fg;
+            font-size: 14px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.text;
+            color: danger ? #ed333b : Palette.foreground;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component ContextMenu inherits Rectangle {
+    in property <bool> is_visible;
+    in property <string> ssid;
+    in property <bool> is_saved;
+    in property <bool> is_connected;
+    
+    callback forget(string);
+    callback info(string);
+    callback advanced(string);
+    callback closed;
+
+    width: 160px;
+    height: menu-layout.preferred-height;
+    background: Palette.card-bg;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Palette.separator;
+    drop-shadow-blur: 15px;
+    drop-shadow-color: rgba(0,0,0,0.5);
+
+    menu-layout := VerticalLayout {
+        padding: 4px;
+        spacing: 2px;
+        
+        MenuItem {
+            text: "Info";
+            icon: "󰋼";
+            clicked => { root.info(root.ssid); root.closed(); }
+        }
+        
+        if (root.is_saved) : MenuItem {
+            text: "Advanced";
+            icon: "⚙";
+            clicked => { root.advanced(root.ssid); root.closed(); }
+        }
+        
+        if (root.is_saved) : MenuItem {
+            text: "Forget";
+            icon: "󰆴";
+            danger: true;
+            clicked => { root.forget(root.ssid); root.closed(); }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    in property <[NetworkItem]> networks;
+    in property <[VpnItem]> vpns;
+    in property <string> status_msg: "Ready";
+    in property <bool> is_connecting: false;
+    in property <bool> show_settings: false;
+    in property <bool> pywal_enabled: false;
+    
+    in property <[float]> download_history;
+    in property <[float]> upload_history;
+    in property <float> max_speed: 1.0;
+    in property <string> current_download: "0 B/s";
+    in property <string> current_upload: "0 B/s";
+    in property <string> expanded_ssid: "";
+
+    // Info & Advanced Props
+    in property <string> info_content: "";
+    in-out property <bool> show_info: false;
+    in-out property <bool> show_advanced: false;
+    in property <string> active_config_ssid: "";
+    in-out property <bool> config_autoconnect: true;
+    in-out property <int> config_priority: 0;
+    in-out property <string> config_dns: "";
+
+    callback connect(string, string);
+    callback disconnect();
+    callback refresh();
+    callback toggle_settings();
+    callback toggle_pywal(bool);
+    callback open_nmtui();
+    callback expand_network(string);
+    callback toggle_vpn(string, string, bool);
+    callback import_vpn();
+    
+    callback forget_network(string);
+    callback show_network_info(string);
+    callback show_network_advanced(string);
+    callback save_network_config(string, bool, int, string);
+
+    title: "AuraLink";
+    width: 380px;
+    height: 640px;
+    background: Palette.background;
+    default-font-family: "JetBrainsMono Nerd Font";
+
+    property <length> context_menu_x: 0;
+    property <length> context_menu_y: 0;
+    in-out property <bool> show_context_menu: false;
+    property <string> context_ssid: "";
+    property <bool> context_is_saved: false;
+    property <bool> context_is_connected: false;
+
+    // Overlay handler
+    TouchArea {
+        width: 100%; height: 100%;
+        visible: show_context_menu || show_info || show_advanced;
+        clicked => { 
+            show_context_menu = false; 
+            show_info = false;
+            show_advanced = false;
+        }
+    }
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 12px;
+
+        // Header
+        HorizontalLayout {
+            VerticalLayout {
+                Text {
+                    text: "AuraLink";
+                    font-size: 20px;
+                    font-weight: 700;
+                    color: Palette.foreground;
+                }
+                Text {
+                    text: status_msg;
+                    font-size: 12px;
+                    color: Palette.secondary-fg;
+                }
+            }
+            
+            HorizontalLayout {
+                alignment: end;
+                spacing: 8px;
+                
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    background: Palette.card-bg;
+                    border-radius: 8px;
+                    Text { text: "󰑐"; font-size: 16px; color: Palette.foreground; }
+                    TouchArea { clicked => { refresh(); } }
+                }
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    background: Palette.card-bg;
+                    border-radius: 8px;
+                    Text { text: "⚙"; font-size: 16px; color: Palette.foreground; }
+                    TouchArea { clicked => { toggle_settings(); } }
+                }
+            }
+        }
+
+        if (show_settings) : Rectangle {
+            background: Palette.card-bg;
+            border-radius: 12px;
+            height: 140px;
+            
+            VerticalLayout {
+                padding: 12px;
+                spacing: 12px;
+                
+                ThemeToggle {
+                    text: "Pywal Auto-Sync";
+                    checked: pywal_enabled;
+                    toggled(enabled) => { toggle_pywal(enabled); }
+                }
+
+                ActionButton {
+                    text: "Import VPN Config (.conf, .ovpn)";
+                    clicked => { import_vpn(); }
+                }
+
+                Rectangle {
+                    height: 32px;
+                    background: Palette.accent.with-alpha(0.1);
+                    border-radius: 8px;
+                    border-width: 0;
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 8px;
+                        Text { text: "🛠 Advanced Editor (nmtui)"; font-size: 12px; color: Palette.foreground; }
+                    }
+                    TouchArea { clicked => { open_nmtui(); } }
+                }
+            }
+        }
+
+        ScrollView {
+            VerticalLayout {
+                spacing: 16px;
+                alignment: start;
+
+                // Wi-Fi Section
+                VerticalLayout {
+                    spacing: 4px;
+                    Text {
+                        text: "WI-FI NETWORKS";
+                        font-size: 11px;
+                        font-weight: 800;
+                        color: Palette.secondary-fg;
+                        letter-spacing: 1px;
+                    }
+
+                    VerticalLayout {
+                        spacing: 0px;
+                        for net[idx] in networks : VerticalLayout {
+                            spacing: 0px;
+                            Rectangle {
+                                background: net.connected ? Palette.accent.with-alpha(0.1) : (touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent);
+                                border-radius: 8px;
+                                
+                                touch := TouchArea {
+                                    clicked => {
+                                        if (net.connected) {
+                                            expand_network(net.ssid == expanded_ssid ? "" : net.ssid);
+                                        }
+                                    }
+                                }
+
+                                VerticalLayout {
+                                    padding: 12px;
+                                    spacing: 8px;
+
+                                    HorizontalLayout {
+                                        VerticalLayout {
+                                            HorizontalLayout {
+                                                spacing: 4px;
+                                                Text {
+                                                    text: net.ssid;
+                                                    font-size: 14px;
+                                                    font-weight: 700;
+                                                    color: Palette.foreground;
+                                                }
+                                                if (net.saved) : Text {
+                                                    text: "󰌆";
+                                                    font-size: 11px;
+                                                    color: Palette.secondary-fg;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                            HorizontalLayout {
+                                                spacing: 4px;
+                                                Text {
+                                                    text: net.icon;
+                                                    font-size: 16px;
+                                                    color: net.icon_color;
+                                                }
+                                                HorizontalLayout {
+                                                    spacing: 4px;
+                                                    Text {
+                                                        text: net.signal + "%";
+                                                        font-size: 12px;
+                                                        font-weight: 700;
+                                                        color: Palette.foreground;
+                                                    }
+                                                    Text {
+                                                        text: "•";
+                                                        font-size: 12px;
+                                                        color: Palette.secondary-fg;
+                                                    }
+                                                    Text {
+                                                        text: net.security;
+                                                        font-size: 11px;
+                                                        color: Palette.secondary-fg;
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        HorizontalLayout {
+                                            alignment: end;
+                                            spacing: 12px;
+                                            
+                                            VerticalLayout {
+                                                alignment: center;
+                                                Rectangle {
+                                                    width: 24px;
+                                                    height: 24px;
+                                                    background: context-touch.has-hover ? Palette.foreground.with-alpha(0.1) : transparent;
+                                                    border-radius: 12px;
+                                                    Text { text: "󰇘"; font-size: 18px; color: Palette.foreground; }
+                                                    context-touch := TouchArea {
+                                                        clicked => {
+                                                            context_ssid = net.ssid;
+                                                            context_is_saved = net.saved;
+                                                            context_is_connected = net.connected;
+                                                            context_menu_x = self.absolute-position.x - 140px;
+                                                            context_menu_y = self.absolute-position.y + 20px;
+                                                            show_context_menu = true;
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            VerticalLayout {
+                                                alignment: center;
+                                                if (net.connected) : HorizontalLayout {
+                                                    spacing: 12px;
+                                                    alignment: center;
+                                                    Text {
+                                                        text: net.ping;
+                                                        font-weight: 700;
+                                                        color: #2ec27e;
+                                                        vertical-alignment: center;
+                                                    }
+                                                    ActionButton {
+                                                        text: "Disconnect";
+                                                        primary: false;
+                                                        danger: true;
+                                                        width: 80px;
+                                                        clicked => { disconnect(); }
+                                                    }
+                                                }
+                                                if (!net.connected) : ActionButton {
+                                                    text: "Connect";
+                                                    enabled: !is_connecting;
+                                                    width: 80px;
+                                                    clicked => { connect(net.ssid, ""); }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if (net.ssid == expanded_ssid) : VerticalLayout {
+                                        spacing: 8px;
+                                        SpeedGraph {
+                                            height: 140px;
+                                            download_points: download_history;
+                                            upload_points: upload_history;
+                                            max_val: max_speed;
+                                        }
+                                        HorizontalLayout {
+                                            spacing: 12px;
+                                            Text { text: "⬇ " + current_download; color: #00bfff; font-weight: 700; }
+                                            Text { text: "⬆ " + current_upload; color: #ff4500; font-weight: 700; }
+                                        }
+                                    }
+                                }
+                            }
+                            if (idx < networks.length - 1) : HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                Rectangle {
+                                    height: 1px;
+                                    background: Palette.separator;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // VPN Section
+                if (vpns.length > 0) : VerticalLayout {
+                    spacing: 4px;
+                    
+                    VerticalLayout {
+                        padding-top: 4px;
+                        padding-bottom: 4px;
+                        Rectangle {
+                            height: 1px;
+                            background: Palette.separator;
+                        }
+                    }
+
+                    Text {
+                        text: "VPNs & PROXIES";
+                        font-size: 11px;
+                        font-weight: 800;
+                        color: Palette.secondary-fg;
+                        letter-spacing: 1px;
+                    }
+                    
+                    VerticalLayout {
+                        spacing: 0px;
+                        for vpn[idx] in vpns : VerticalLayout {
+                            spacing: 0px;
+                            Rectangle {
+                                background: vpn-touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent;
+                                border-radius: 8px;
+                                height: 44px;
+                                
+                                vpn-touch := TouchArea {}
+
+                                HorizontalLayout {
+                                    padding-left: 12px;
+                                    padding-right: 12px;
+                                    
+                                    Text {
+                                        text: vpn.name;
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        color: Palette.foreground;
+                                        vertical-alignment: center;
+                                    }
+                                    
+                                    Rectangle {} // Spacer
+
+                                    HorizontalLayout {
+                                        spacing: 12px;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Text {
+                                                text: vpn.type-name;
+                                                font-size: 10px;
+                                                color: Palette.secondary-fg;
+                                            }
+                                        }
+                                        VerticalLayout {
+                                            alignment: center;
+                                            ThemeToggle {
+                                                checked: vpn.active;
+                                                toggled(active) => { toggle_vpn(vpn.name, vpn.type-name, active); }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if (idx < vpns.length - 1) : HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                Rectangle {
+                                    height: 1px;
+                                    background: Palette.separator;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Context Menu Overlay
+    if (show_context_menu) : ContextMenu {
+        x: Math.min(context_menu_x, root.width - self.width - 10px);
+        y: Math.min(context_menu_y, root.height - self.height - 10px);
+        ssid: context_ssid;
+        is_saved: context_is_saved;
+        is_connected: context_is_connected;
+        forget(s) => { forget_network(s); }
+        info(s) => { show_network_info(s); }
+        advanced(s) => { show_network_advanced(s); }
+        closed => { show_context_menu = false; }
+    }
+
+    // Info Modal
+    if (show_info) : Rectangle {
+        x: 20px; y: 100px;
+        width: root.width - 40px;
+        height: root.height - 200px;
+        background: Palette.card-bg;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Palette.separator;
+        
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+            Text { text: "Connection Details"; font-size: 18px; font-weight: 700; color: Palette.foreground; }
+            ScrollView {
+                Text {
+                    text: info_content;
+                    color: Palette.secondary-fg;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+            }
+            ActionButton {
+                text: "Close";
+                clicked => { show_info = false; }
+            }
+        }
+    }
+
+    // Advanced Config Modal
+    if (show_advanced) : Rectangle {
+        x: 20px; y: 100px;
+        width: root.width - 40px;
+        height: root.height - 200px;
+        background: Palette.card-bg;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Palette.separator;
+        
+        VerticalLayout {
+            padding: 16px;
+            spacing: 16px;
+            Text { text: "Settings: " + active_config_ssid; font-size: 16px; font-weight: 700; color: Palette.foreground; }
+            
+            VerticalLayout {
+                spacing: 8px;
+                CheckBox {
+                    text: "Connect Automatically";
+                    checked: config_autoconnect;
+                    toggled => { config_autoconnect = !config_autoconnect; }
+                }
+                
+                VerticalLayout {
+                    spacing: 4px;
+                    Text { text: "Priority (Higher = preferred)"; font-size: 11px; color: Palette.secondary-fg; }
+                    LineEdit {
+                        text: config_priority;
+                        edited(t) => { config_priority = t.to-float(); }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 4px;
+                    Text { text: "Custom DNS (comma separated)"; font-size: 11px; color: Palette.secondary-fg; }
+                    LineEdit {
+                        text: config_dns;
+                        edited(t) => { config_dns = t; }
+                    }
+                }
+            }
+
+            Rectangle {} // Spacer
+
+            HorizontalLayout {
+                spacing: 10px;
+                ActionButton {
+                    text: "Cancel"; primary: false;
+                    clicked => { show_advanced = false; }
+                }
+                ActionButton {
+                    text: "Save Changes";
+                    clicked => {
+                        save_network_config(active_config_ssid, config_autoconnect, config_priority, config_dns);
+                        show_advanced = false;
+                    }
+                }
+            }
+        }
+    }
+}

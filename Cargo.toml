@@ -1,0 +1,20 @@
+[package]
+name = "auralink"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+slint = "1.15.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tokio = { version = "1.50.0", features = ["full"] }
+rfd = "0.15.2"
+
+[build-dependencies]
+slint-build = "1.15.1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
