@@ -4,6 +4,10 @@ version = "0.1.0"
 description = "A modern, lightweight, and aesthetic Wi-Fi and VPN manager for Linux."
 edition = "2024"
 
+[[bin]]
+name = "auralink"
+path = "src/main.rs"
+
 [package.metadata.deb]
 name = "auralink"
 maintainer = "rajchauhan28"
