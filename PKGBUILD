@@ -6,19 +6,20 @@ pkgdesc="A modern, lightweight, and aesthetic Wi-Fi and VPN manager for Linux."
 arch=('x86_64')
 url="https://github.com/rajchauhan28/auralink"
 license=('MIT')
-depends=('gcc-libs' 'glibc' 'networkmanager' 'qt6-base')
+depends=('gcc-libs' 'glibc' 'networkmanager')
 makedepends=('cargo' 'git')
-# Use the local git repository to avoid directory collisions
-source=("${pkgname}::git+file://${startdir}")
+# Use a specific name for the build clone to avoid collision with local 'src' directory
+source=("${pkgname}_build::git+file://${startdir}")
 sha256sums=('SKIP')
 
 build() {
-  cd "${pkgname}"
+  # Build inside the uniquely named clone
+  cd "${srcdir}/${pkgname}_build"
   cargo build --release
 }
 
 package() {
-  cd "${pkgname}"
+  cd "${srcdir}/${pkgname}_build"
   install -Dm755 "target/release/auralink" "${pkgdir}/usr/bin/auralink"
   install -Dm644 "auralink.desktop" "${pkgdir}/usr/share/applications/auralink.desktop"
   install -Dm644 "assets/auralink.svg" "${pkgdir}/usr/share/icons/hicolor/scalable/apps/auralink.svg"
