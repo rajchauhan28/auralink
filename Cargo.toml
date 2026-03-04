@@ -23,7 +23,7 @@ assets = [
 ]
 
 [dependencies]
-slint = { version = "1.15.1", default-features = false, features = ["std", "slint-macros", "backend-winit", "renderer-femtovg", "compat-1-2"] }
+slint = { version = "1.15.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tokio = { version = "1.50.0", features = ["full"] }
