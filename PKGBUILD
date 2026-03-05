@@ -1,6 +1,6 @@
 # Maintainer: rajchauhan28
 pkgname=auralink
-pkgver=0.1.2
+pkgver=0.1.3
 pkgrel=1
 pkgdesc="A modern, lightweight, and aesthetic Wi-Fi and VPN manager for Linux."
 arch=('x86_64')

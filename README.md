@@ -35,7 +35,7 @@ makepkg -si
 ### Debian / Ubuntu
 Download the `.deb` from the [releases page](https://github.com/rajchauhan28/auralink/releases) and install:
 ```bash
-sudo dpkg -i auralink_0.1.2_amd64.deb
+sudo dpkg -i auralink_0.1.3_amd64.deb
 sudo apt-get install -f
 ```
 
