@@ -1,6 +1,6 @@
 [package]
 name = "auralink"
-version = "0.1.0"
+version = "0.1.2"
 description = "A modern, lightweight, and aesthetic Wi-Fi and VPN manager for Linux."
 edition = "2024"
 

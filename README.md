@@ -13,9 +13,14 @@
 - **Modern UI 💎**: A clean, intuitive interface with smooth animations and rounded aesthetics.
 - **Smart Connection Management ⚡**: Connect, disconnect, and monitor signal strength.
 - **Network Stats & Graphs 📊**: Real-time speed monitoring with live graphs.
-- **Advanced Network Options ⚙️**: Configure auto-connect, priorities, and custom DNS.
+- **Advanced Network Options ⚙️**: 
+  - **MAC Spoofing**: Custom cloned MAC addresses.
+  - **IP Config**: Full IPv4 and IPv6 manual/auto configuration.
+  - **Password Management**: Easily update Wi-Fi passwords.
+  - **Connection Control**: Configure auto-connect and priorities.
 - **Context-Aware Actions 󰇘**: Three-dot menu for "Forget", "Info", and "Advanced" options.
 - **VPN Support 🔒**: Manage VPN connections (Wireguard, OpenVPN, WARP, etc).
+- **Floating Window 🪟**: Default floating behavior with resizability.
 
 ## 📦 Installation
 
@@ -30,7 +35,7 @@ makepkg -si
 ### Debian / Ubuntu
 Download the `.deb` from the [releases page](https://github.com/rajchauhan28/auralink/releases) and install:
 ```bash
-sudo dpkg -i auralink_0.1.0_amd64.deb
+sudo dpkg -i auralink_0.1.2_amd64.deb
 sudo apt-get install -f
 ```
 
@@ -41,11 +46,13 @@ chmod +x AuraLink-x86_64.AppImage
 ./AuraLink-x86_64.AppImage
 ```
 
-## 🛠 Tech Stack
-- **Rust**: Logic & Performance.
-- **Slint**: UI Framework (using winit backend).
-- **NetworkManager**: Backend integration.
-- **Pywal**: Theme orchestration.
+## 🛠 Building from source
+
+You can use the provided build script to generate all package formats (AppImage, DEB, Arch):
+```bash
+./build_all.sh
+```
+The output files will be located in the `output/` directory.
 
 ## 📝 License
 MIT License - Copyright (c) 2026 rajchauhan28

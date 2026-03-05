@@ -8,6 +8,7 @@ use rfd::FileDialog;
 
 slint::include_modules!();
 
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct AppConfig {
     pywal_enabled: bool,
 }
@@ -18,11 +19,20 @@ impl AppConfig {
         let path = format!("{}/.config/auralink/config.json", home);
         std::fs::read_to_string(path)
             .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-            .map(|v| AppConfig {
-                pywal_enabled: v["pywal_enabled"].as_bool().unwrap_or(false),
+            .and_then(|s| serde_json::from_str::<AppConfig>(&s).ok())
+            .unwrap_or(AppConfig { 
+                pywal_enabled: false,
             })
-            .unwrap_or(AppConfig { pywal_enabled: false })
+    }
+
+    fn save(&self) {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dir = format!("{}/.config/auralink", home);
+        let path = format!("{}/config.json", dir);
+        let _ = std::fs::create_dir_all(dir);
+        if let Ok(s) = serde_json::to_string(self) {
+            let _ = std::fs::write(path, s);
+        }
     }
 }
 
@@ -110,11 +120,7 @@ async fn main() -> Result<(), slint::PlatformError> {
     main_window.on_toggle_pywal(move |enabled| {
         if let Ok(mut cfg) = config_clone.lock() {
             cfg.pywal_enabled = enabled;
-            let home = std::env::var("HOME").unwrap_or_default();
-            let dir = format!("{}/.config/auralink", home);
-            let path = format!("{}/config.json", dir);
-            let _ = std::fs::create_dir_all(dir);
-            let _ = std::fs::write(path, serde_json::to_string(&serde_json::json!({"pywal_enabled": enabled})).unwrap());
+            cfg.save();
             
             if enabled {
                 apply_pywal_theme(window_weak.clone());
@@ -183,6 +189,14 @@ async fn main() -> Result<(), slint::PlatformError> {
                 ui.set_config_autoconnect(cfg.autoconnect);
                 ui.set_config_priority(cfg.priority);
                 ui.set_config_dns(cfg.dns.into());
+                ui.set_config_ipv4_method(cfg.ipv4_method.into());
+                ui.set_config_ipv4_address(cfg.ipv4_address.into());
+                ui.set_config_ipv4_gateway(cfg.ipv4_gateway.into());
+                ui.set_config_ipv6_method(cfg.ipv6_method.into());
+                ui.set_config_ipv6_address(cfg.ipv6_address.into());
+                ui.set_config_ipv6_gateway(cfg.ipv6_gateway.into());
+                ui.set_config_mac_address(cfg.mac_address.into());
+                ui.set_config_password(cfg.password.into());
                 ui.set_show_advanced(true);
             } else {
                 ui.set_status_msg("Could not load config".into());
@@ -191,14 +205,20 @@ async fn main() -> Result<(), slint::PlatformError> {
     });
 
     let window_weak = main_window.as_weak();
-    main_window.on_save_network_config(move |ssid, auto, prio, dns| {
+    main_window.on_save_network_config(move |ssid, auto, prio, dns, i4m, i4a, i4g, i6m, i6a, i6g, mac, pass| {
         let ssid = ssid.to_string();
-        let dns = dns.to_string();
         let config = nm_backend::NetworkConfig {
             autoconnect: auto,
             priority: prio,
-            dns,
-            ip4_method: "auto".to_string(),
+            dns: dns.to_string(),
+            ipv4_method: i4m.to_string(),
+            ipv4_address: i4a.to_string(),
+            ipv4_gateway: i4g.to_string(),
+            ipv6_method: i6m.to_string(),
+            ipv6_address: i6a.to_string(),
+            ipv6_gateway: i6g.to_string(),
+            mac_address: mac.to_string(),
+            password: pass.to_string(),
         };
         
         let ww = window_weak.clone();

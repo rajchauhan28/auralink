@@ -212,6 +212,12 @@ component ContextMenu inherits Rectangle {
     }
 }
 
+component FormLabel inherits Text {
+    font-size: 11px;
+    color: Palette.secondary-fg;
+    font-weight: 700;
+}
+
 export component AppWindow inherits Window {
     in property <[NetworkItem]> networks;
     in property <[VpnItem]> vpns;
@@ -232,9 +238,18 @@ export component AppWindow inherits Window {
     in-out property <bool> show_info: false;
     in-out property <bool> show_advanced: false;
     in property <string> active_config_ssid: "";
+    
     in-out property <bool> config_autoconnect: true;
     in-out property <int> config_priority: 0;
     in-out property <string> config_dns: "";
+    in-out property <string> config_ipv4_method: "auto";
+    in-out property <string> config_ipv4_address: "";
+    in-out property <string> config_ipv4_gateway: "";
+    in-out property <string> config_ipv6_method: "auto";
+    in-out property <string> config_ipv6_address: "";
+    in-out property <string> config_ipv6_gateway: "";
+    in-out property <string> config_mac_address: "";
+    in-out property <string> config_password: "";
 
     callback connect(string, string);
     callback disconnect();
@@ -249,13 +264,28 @@ export component AppWindow inherits Window {
     callback forget_network(string);
     callback show_network_info(string);
     callback show_network_advanced(string);
-    callback save_network_config(string, bool, int, string);
+    callback save_network_config(
+        string, // ssid
+        bool,   // autoconnect
+        int,    // priority
+        string, // dns
+        string, // ipv4_method
+        string, // ipv4_address
+        string, // ipv4_gateway
+        string, // ipv6_method
+        string, // ipv6_address
+        string, // ipv6_gateway
+        string, // mac
+        string  // password
+    );
 
     title: "AuraLink";
-    width: 380px;
-    height: 640px;
+    min-width: 420px;
+    min-height: 640px;
     background: Palette.background;
     default-font-family: "JetBrainsMono Nerd Font";
+    no-frame: true;
+    always-on-top: true;
 
     property <length> context_menu_x: 0;
     property <length> context_menu_y: 0;
@@ -613,24 +643,30 @@ export component AppWindow inherits Window {
 
     // Info Modal
     if (show_info) : Rectangle {
-        x: 20px; y: 100px;
-        width: root.width - 40px;
-        height: root.height - 200px;
+        x: 10px; y: 40px;
+        width: root.width - 20px;
+        height: root.height - 80px;
         background: Palette.card-bg;
         border-radius: 12px;
         border-width: 1px;
         border-color: Palette.separator;
         
         VerticalLayout {
-            padding: 16px;
-            spacing: 12px;
-            Text { text: "Connection Details"; font-size: 18px; font-weight: 700; color: Palette.foreground; }
+            padding: 20px;
+            spacing: 16px;
+            Text { text: "Connection Details"; font-size: 20px; font-weight: 800; color: Palette.foreground; }
             ScrollView {
-                Text {
-                    text: info_content;
-                    color: Palette.secondary-fg;
-                    font-size: 11px;
-                    wrap: word-wrap;
+                VerticalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Text {
+                        text: info_content;
+                        color: Palette.foreground;
+                        font-size: 14px;
+                        font-family: "JetBrainsMono Nerd Font";
+                        wrap: word-wrap;
+                        letter-spacing: 0.5px;
+                    }
                 }
             }
             ActionButton {
@@ -642,9 +678,9 @@ export component AppWindow inherits Window {
 
     // Advanced Config Modal
     if (show_advanced) : Rectangle {
-        x: 20px; y: 100px;
-        width: root.width - 40px;
-        height: root.height - 200px;
+        x: 10px; y: 40px;
+        width: root.width - 20px;
+        height: root.height - 80px;
         background: Palette.card-bg;
         border-radius: 12px;
         border-width: 1px;
@@ -652,37 +688,135 @@ export component AppWindow inherits Window {
         
         VerticalLayout {
             padding: 16px;
-            spacing: 16px;
+            spacing: 12px;
             Text { text: "Settings: " + active_config_ssid; font-size: 16px; font-weight: 700; color: Palette.foreground; }
             
-            VerticalLayout {
-                spacing: 8px;
-                CheckBox {
-                    text: "Connect Automatically";
-                    checked: config_autoconnect;
-                    toggled => { config_autoconnect = !config_autoconnect; }
-                }
-                
+            ScrollView {
                 VerticalLayout {
-                    spacing: 4px;
-                    Text { text: "Priority (Higher = preferred)"; font-size: 11px; color: Palette.secondary-fg; }
-                    LineEdit {
-                        text: config_priority;
-                        edited(t) => { config_priority = t.to-float(); }
-                    }
-                }
+                    spacing: 16px;
+                    
+                    // General
+                    VerticalLayout {
+                        spacing: 8px;
+                        Text { text: "GENERAL"; font-size: 10px; font-weight: 800; color: Palette.accent; }
+                        CheckBox {
+                            text: "Connect Automatically";
+                            checked: config_autoconnect;
+                            toggled => { config_autoconnect = !config_autoconnect; }
+                        }
+                        
+                        VerticalLayout {
+                            spacing: 4px;
+                            FormLabel { text: "Priority (Higher = preferred)"; }
+                            LineEdit {
+                                text: config_priority;
+                                edited(t) => { config_priority = t.to-float(); }
+                            }
+                        }
 
-                VerticalLayout {
-                    spacing: 4px;
-                    Text { text: "Custom DNS (comma separated)"; font-size: 11px; color: Palette.secondary-fg; }
-                    LineEdit {
-                        text: config_dns;
-                        edited(t) => { config_dns = t; }
+                        VerticalLayout {
+                            spacing: 4px;
+                            FormLabel { text: "Wi-Fi Password"; }
+                            LineEdit {
+                                text: config_password;
+                                input-type: password;
+                                edited(t) => { config_password = t; }
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 4px;
+                            FormLabel { text: "Cloned MAC Address (Spoofing)"; }
+                            LineEdit {
+                                text: config_mac_address;
+                                placeholder-text: "00:11:22:33:44:55";
+                                edited(t) => { config_mac_address = t; }
+                            }
+                        }
+                    }
+
+                    // IPv4
+                    VerticalLayout {
+                        spacing: 8px;
+                        Text { text: "IPv4 CONFIGURATION"; font-size: 10px; font-weight: 800; color: Palette.accent; }
+                        
+                        VerticalLayout {
+                            spacing: 4px;
+                            FormLabel { text: "Method"; }
+                            LineEdit {
+                                text: config_ipv4_method;
+                                placeholder-text: "auto, manual, disabled";
+                                edited(t) => { config_ipv4_method = t; }
+                            }
+                        }
+
+                        if (config_ipv4_method == "manual") : VerticalLayout {
+                            spacing: 8px;
+                            VerticalLayout {
+                                spacing: 4px;
+                                FormLabel { text: "Address (e.g. 192.168.1.10/24)"; }
+                                LineEdit {
+                                    text: config_ipv4_address;
+                                    edited(t) => { config_ipv4_address = t; }
+                                }
+                            }
+                            VerticalLayout {
+                                spacing: 4px;
+                                FormLabel { text: "Gateway"; }
+                                LineEdit {
+                                    text: config_ipv4_gateway;
+                                    edited(t) => { config_ipv4_gateway = t; }
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 4px;
+                            FormLabel { text: "DNS Servers (comma separated)"; }
+                            LineEdit {
+                                text: config_dns;
+                                edited(t) => { config_dns = t; }
+                            }
+                        }
+                    }
+
+                    // IPv6
+                    VerticalLayout {
+                        spacing: 8px;
+                        Text { text: "IPv6 CONFIGURATION"; font-size: 10px; font-weight: 800; color: Palette.accent; }
+                        
+                        VerticalLayout {
+                            spacing: 4px;
+                            FormLabel { text: "Method"; }
+                            LineEdit {
+                                text: config_ipv6_method;
+                                placeholder-text: "auto, manual, ignore";
+                                edited(t) => { config_ipv6_method = t; }
+                            }
+                        }
+
+                        if (config_ipv6_method == "manual") : VerticalLayout {
+                            spacing: 8px;
+                            VerticalLayout {
+                                spacing: 4px;
+                                FormLabel { text: "Address"; }
+                                LineEdit {
+                                    text: config_ipv6_address;
+                                    edited(t) => { config_ipv6_address = t; }
+                                }
+                            }
+                            VerticalLayout {
+                                spacing: 4px;
+                                FormLabel { text: "Gateway"; }
+                                LineEdit {
+                                    text: config_ipv6_gateway;
+                                    edited(t) => { config_ipv6_gateway = t; }
+                                }
+                            }
+                        }
                     }
                 }
             }
-
-            Rectangle {} // Spacer
 
             HorizontalLayout {
                 spacing: 10px;
@@ -693,7 +827,20 @@ export component AppWindow inherits Window {
                 ActionButton {
                     text: "Save Changes";
                     clicked => {
-                        save_network_config(active_config_ssid, config_autoconnect, config_priority, config_dns);
+                        save_network_config(
+                            active_config_ssid, 
+                            config_autoconnect, 
+                            config_priority, 
+                            config_dns,
+                            config_ipv4_method,
+                            config_ipv4_address,
+                            config_ipv4_gateway,
+                            config_ipv6_method,
+                            config_ipv6_address,
+                            config_ipv6_gateway,
+                            config_mac_address,
+                            config_password
+                        );
                         show_advanced = false;
                     }
                 }

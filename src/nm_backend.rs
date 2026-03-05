@@ -228,30 +228,79 @@ pub fn forget_network(ssid: &str) -> bool {
 
 pub fn get_network_info(ssid: &str) -> String {
     let output = Command::new("nmcli")
-        .args(&["-t", "-f", "GENERAL,IP4,IP6,PROXY", "connection", "show", ssid])
+        .args(&["connection", "show", ssid])
         .output()
         .ok();
         
     if let Some(o) = output {
         if o.status.success() {
-            return String::from_utf8_lossy(&o.stdout).to_string();
+            let full_info = String::from_utf8_lossy(&o.stdout).to_string();
+            let mut result = Vec::new();
+            
+            for line in full_info.lines() {
+                if line.contains("GENERAL.") || 
+                   line.contains("IP4.") || 
+                   line.contains("IP6.") || 
+                   line.contains("DHCP4.") ||
+                   line.contains("802-11-wireless") 
+                {
+                    if let Some(sep_idx) = line.find(':') {
+                        let key = line[..sep_idx].trim();
+                        let value = line[sep_idx+1..].trim();
+                        
+                        // Make key more readable: "IP4.ADDRESS[1]" -> "IP4 ADDRESS"
+                        let clean_key = key.replace('.', " ")
+                                           .replace('[', " ")
+                                           .replace(']', "")
+                                           .replace('-', " ");
+                        
+                        if !value.is_empty() && value != "--" {
+                            result.push(format!("{}: {}", clean_key.to_uppercase(), value));
+                        }
+                    }
+                }
+            }
+            
+            if result.is_empty() { return "No active connection details.".to_string(); }
+            return result.join("\n");
         }
     }
     
     format!("SSID: {}\nNo detailed connection info available.", ssid)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NetworkConfig {
     pub autoconnect: bool,
     pub priority: i32,
     pub dns: String,
-    pub ip4_method: String,
+    pub ipv4_method: String,
+    pub ipv4_address: String,
+    pub ipv4_gateway: String,
+    pub ipv6_method: String,
+    pub ipv6_address: String,
+    pub ipv6_gateway: String,
+    pub mac_address: String,
+    pub password: String,
 }
 
 pub fn get_network_config(ssid: &str) -> Option<NetworkConfig> {
+    let fields = [
+        "connection.autoconnect",
+        "connection.autoconnect-priority",
+        "ipv4.dns",
+        "ipv4.method",
+        "ipv4.addresses",
+        "ipv4.gateway",
+        "ipv6.method",
+        "ipv6.addresses",
+        "ipv6.gateway",
+        "802-11-wireless.cloned-mac-address",
+        "802-11-wireless-security.psk",
+    ];
+
     let output = Command::new("nmcli")
-        .args(&["-t", "-f", "connection.autoconnect,connection.autoconnect-priority,ipv4.dns,ipv4.method", "connection", "show", ssid])
+        .args(&["-s", "-t", "-f", &fields.join(","), "connection", "show", ssid])
         .output()
         .ok()?;
         
@@ -262,7 +311,14 @@ pub fn get_network_config(ssid: &str) -> Option<NetworkConfig> {
         autoconnect: true,
         priority: 0,
         dns: String::new(),
-        ip4_method: "auto".to_string(),
+        ipv4_method: "auto".to_string(),
+        ipv4_address: String::new(),
+        ipv4_gateway: String::new(),
+        ipv6_method: "auto".to_string(),
+        ipv6_address: String::new(),
+        ipv6_gateway: String::new(),
+        mac_address: String::new(),
+        password: String::new(),
     };
     
     for line in stdout.lines() {
@@ -272,7 +328,14 @@ pub fn get_network_config(ssid: &str) -> Option<NetworkConfig> {
             "connection.autoconnect" => config.autoconnect = parts[1] == "yes",
             "connection.autoconnect-priority" => config.priority = parts[1].parse().unwrap_or(0),
             "ipv4.dns" => config.dns = parts[1].to_string(),
-            "ipv4.method" => config.ip4_method = parts[1].to_string(),
+            "ipv4.method" => config.ipv4_method = parts[1].to_string(),
+            "ipv4.addresses" => config.ipv4_address = parts[1].to_string(),
+            "ipv4.gateway" => config.ipv4_gateway = parts[1].to_string(),
+            "ipv6.method" => config.ipv6_method = parts[1].to_string(),
+            "ipv6.addresses" => config.ipv6_address = parts[1].to_string(),
+            "ipv6.gateway" => config.ipv6_gateway = parts[1].to_string(),
+            "802-11-wireless.cloned-mac-address" => config.mac_address = parts[1].to_string(),
+            "802-11-wireless-security.psk" => config.password = parts[1].to_string(),
             _ => {}
         }
     }
@@ -280,17 +343,58 @@ pub fn get_network_config(ssid: &str) -> Option<NetworkConfig> {
 }
 
 pub fn update_network_config(ssid: &str, config: NetworkConfig) -> bool {
-    let mut cmd = Command::new("nmcli");
-    cmd.args(&["connection", "modify", ssid,
-        "connection.autoconnect", if config.autoconnect { "yes" } else { "no" },
-        "connection.autoconnect-priority", &config.priority.to_string(),
-        "ipv4.method", &config.ip4_method]);
-    
+    let mut args = vec![
+        "connection".to_string(),
+        "modify".to_string(),
+        ssid.to_string(),
+        "connection.autoconnect".to_string(),
+        if config.autoconnect { "yes".to_string() } else { "no".to_string() },
+        "connection.autoconnect-priority".to_string(),
+        config.priority.to_string(),
+        "ipv4.method".to_string(),
+        config.ipv4_method,
+        "ipv6.method".to_string(),
+        config.ipv6_method,
+    ];
+
     if !config.dns.is_empty() {
-        cmd.args(&["ipv4.dns", &config.dns]);
+        args.push("ipv4.dns".to_string());
+        args.push(config.dns);
     }
 
-    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+    if !config.ipv4_address.is_empty() {
+        args.push("ipv4.addresses".to_string());
+        args.push(config.ipv4_address);
+    }
+    if !config.ipv4_gateway.is_empty() {
+        args.push("ipv4.gateway".to_string());
+        args.push(config.ipv4_gateway);
+    }
+
+    if !config.ipv6_address.is_empty() {
+        args.push("ipv6.addresses".to_string());
+        args.push(config.ipv6_address);
+    }
+    if !config.ipv6_gateway.is_empty() {
+        args.push("ipv6.gateway".to_string());
+        args.push(config.ipv6_gateway);
+    }
+
+    if !config.mac_address.is_empty() {
+        args.push("802-11-wireless.cloned-mac-address".to_string());
+        args.push(config.mac_address);
+    }
+    
+    if !config.password.is_empty() {
+        args.push("802-11-wireless-security.psk".to_string());
+        args.push(config.password);
+    }
+
+    let output = Command::new("nmcli")
+        .args(&args)
+        .output();
+    
+    output.map(|o| o.status.success()).unwrap_or(false)
 }
 
 pub fn get_ping(host: &str) -> Option<u64> {
