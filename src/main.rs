@@ -72,14 +72,18 @@ fn apply_pywal_theme(handle: slint::Weak<AppWindow>) {
     
     if let Ok(content) = std::fs::read_to_string(path) {
         if let Ok(wal) = serde_json::from_str::<PywalColors>(&content) {
-            let bg = parse_hex(wal.special.get("background").unwrap_or(&"#141418".to_string())).unwrap_or(Color::from_rgb_u8(20, 20, 24));
-            let fg = parse_hex(wal.special.get("foreground").unwrap_or(&"#ffffff".to_string())).unwrap_or(Color::from_rgb_u8(255, 255, 255));
-            let accent = parse_hex(wal.colors.get("color4").unwrap_or(&"#3584e4".to_string())).unwrap_or(Color::from_rgb_u8(53, 132, 228));
+            let mut bg = parse_hex(wal.special.get("background").unwrap_or(&"#09090b".to_string())).unwrap_or(Color::from_rgb_u8(9, 9, 11));
+            // Add 50% opacity for glassmorphism to the pywal background
+            bg = Color::from_argb_u8(136, bg.red(), bg.green(), bg.blue());
+            
+            let fg = parse_hex(wal.special.get("foreground").unwrap_or(&"#f8fafc".to_string())).unwrap_or(Color::from_rgb_u8(248, 250, 252));
+            // Usually color1 or color4 is a good accent
+            let accent = parse_hex(wal.colors.get("color1").unwrap_or(&"#00f0ff".to_string())).unwrap_or(Color::from_rgb_u8(0, 240, 255));
             
             let card_bg = Color::from_argb_u8(255, 
-                (bg.red() as i16 + 10).clamp(0, 255) as u8,
-                (bg.green() as i16 + 10).clamp(0, 255) as u8,
-                (bg.blue() as i16 + 12).clamp(0, 255) as u8
+                (bg.red() as i16 + 15).clamp(0, 255) as u8,
+                (bg.green() as i16 + 15).clamp(0, 255) as u8,
+                (bg.blue() as i16 + 15).clamp(0, 255) as u8
             );
 
             let _ = slint::invoke_from_event_loop(move || {
@@ -90,7 +94,7 @@ fn apply_pywal_theme(handle: slint::Weak<AppWindow>) {
                     palette.set_accent(accent);
                     palette.set_card_bg(card_bg);
                     palette.set_secondary_fg(Color::from_argb_u8(180, fg.red(), fg.green(), fg.blue()));
-                    palette.set_separator(Color::from_argb_u8(40, fg.red(), fg.green(), fg.blue()));
+                    palette.set_separator(Color::from_argb_u8(60, fg.red(), fg.green(), fg.blue()));
                 }
             });
         }
@@ -129,12 +133,12 @@ async fn main() -> Result<(), slint::PlatformError> {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = handle.upgrade() {
                         let p = ui.global::<Palette>();
-                        p.set_background(Color::from_rgb_u8(20, 20, 24));
-                        p.set_card_bg(Color::from_rgb_u8(32, 32, 36));
-                        p.set_accent(Color::from_rgb_u8(53, 132, 228));
-                        p.set_foreground(Color::from_rgb_u8(255, 255, 255));
-                        p.set_secondary_fg(Color::from_rgb_u8(170, 170, 170));
-                        p.set_separator(Color::from_rgb_u8(51, 51, 51));
+                        p.set_background(parse_hex("#09090b").unwrap());
+                        p.set_card_bg(parse_hex("#18181b").unwrap());
+                        p.set_accent(parse_hex("#00f0ff").unwrap());
+                        p.set_foreground(parse_hex("#f8fafc").unwrap());
+                        p.set_secondary_fg(parse_hex("#a1a1aa").unwrap());
+                        p.set_separator(parse_hex("#27272a").unwrap());
                     }
                 });
             }

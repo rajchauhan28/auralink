@@ -16,14 +16,13 @@ export struct NetworkItem {
     icon: string,
     icon_color: color,
 }
-
 export global Palette {
-    in-out property <color> background: #141418;
-    in-out property <color> card-bg: #202024;
-    in-out property <color> accent: #3584e4;
-    in-out property <color> foreground: #ffffff;
-    in-out property <color> secondary-fg: #aaaaaa;
-    in-out property <color> separator: #333333;
+    in-out property <color> background: #09090b88; // 50% opacity for glassmorphism
+    in-out property <color> card-bg: #18181b;
+    in-out property <color> accent: #00f0ff;
+    in-out property <color> foreground: #f8fafc;
+    in-out property <color> secondary-fg: #a1a1aa;
+    in-out property <color> separator: #27272a;
 }
 
 component ActionButton inherits Rectangle {
@@ -33,18 +32,18 @@ component ActionButton inherits Rectangle {
     in property <bool> danger: false;
     callback clicked;
     
-    height: 24px;
-    background: primary ? (enabled ? Palette.accent : Palette.accent.with-alpha(0.5)) : transparent;
-    border-radius: 6px;
-    border-width: primary ? 0 : 1px;
-    border-color: danger ? #ed333b.with-alpha(0.3) : Palette.accent.with-alpha(0.3);
+    height: 28px;
+    background: primary ? (enabled ? Palette.accent : Palette.accent.with-alpha(0.3)) : transparent;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: danger ? #ff0055.with-alpha(0.8) : Palette.accent.with-alpha(0.8);
     
     states [
         hover when touch.has-hover && enabled : {
-            background: primary ? Palette.accent.brighter(10%) : (danger ? #ed333b.with-alpha(0.15) : Palette.accent.with-alpha(0.15));
+            background: primary ? Palette.accent.brighter(20%) : (danger ? #ff0055.with-alpha(0.2) : Palette.accent.with-alpha(0.2));
         }
         pressed when touch.pressed && enabled : {
-            background: primary ? Palette.accent.darker(10%) : (danger ? #ed333b.with-alpha(0.25) : Palette.accent.with-alpha(0.25));
+            background: primary ? Palette.accent.darker(20%) : (danger ? #ff0055.with-alpha(0.4) : Palette.accent.with-alpha(0.4));
         }
     ]
 
@@ -54,9 +53,10 @@ component ActionButton inherits Rectangle {
 
     Text {
         text: root.text;
-        color: primary ? Palette.background : (danger ? #ed333b : Palette.accent);
-        font-size: 11px;
-        font-weight: 700;
+        color: primary ? Palette.background : (danger ? #ff0055 : Palette.accent);
+        font-size: 10px;
+        font-weight: 900;
+        letter-spacing: 1.5px;
     }
 }
 
@@ -65,28 +65,28 @@ component ThemeToggle inherits Rectangle {
     in-out property <bool> checked;
     callback toggled(bool);
 
-    height: 24px;
+    height: 28px;
     
     HorizontalLayout {
-        spacing: 8px;
+        spacing: 12px;
         alignment: start;
         
         VerticalLayout {
             alignment: center;
             Rectangle {
-                width: 36px;
-                height: 18px;
+                width: 40px;
+                height: 20px;
                 background: root.checked ? Palette.accent : Palette.foreground.with-alpha(0.1);
-                border-radius: 9px;
+                border-radius: 10px;
                 
                 Rectangle {
-                    x: root.checked ? 19px : 2px;
+                    x: root.checked ? 22px : 2px;
                     y: 2px;
-                    width: 14px;
-                    height: 14px;
+                    width: 16px;
+                    height: 16px;
                     background: white;
-                    border-radius: 7px;
-                    animate x { duration: 150ms; easing: ease-in-out; }
+                    border-radius: 8px;
+                    animate x { duration: 250ms; easing: ease-in-out; }
                 }
             }
         }
@@ -95,6 +95,7 @@ component ThemeToggle inherits Rectangle {
             text: root.text;
             color: Palette.foreground;
             font-size: 13px;
+            font-weight: 500;
             vertical-alignment: center;
         }
     }
@@ -113,7 +114,7 @@ component SpeedGraph inherits Rectangle {
     in property <float> max_val;
     
     background: Palette.card-bg.darker(30%);
-    border-radius: 8px;
+    border-radius: 12px;
     clip: true;
 
     for p[i] in download_points : Rectangle {
@@ -121,7 +122,7 @@ component SpeedGraph inherits Rectangle {
         y: parent.height - (p / max_val * parent.height);
         width: parent.width / 60 + 0.5px;
         height: p / max_val * parent.height;
-        background: @linear-gradient(180deg, #00bfff66 0%, #00bfff11 100%);
+        background: @linear-gradient(180deg, Palette.accent.with-alpha(0.6) 0%, Palette.accent.with-alpha(0.1) 100%);
     }
 
     for p[idx] in upload_points : Rectangle {
@@ -129,7 +130,7 @@ component SpeedGraph inherits Rectangle {
         y: parent.height - (p / max_val * parent.height);
         width: parent.width / 60 + 0.5px;
         height: p / max_val * parent.height;
-        background: @linear-gradient(180deg, #ff450066 0%, #ff450011 100%);
+        background: @linear-gradient(180deg, #ff005599 0%, #ff005522 100%);
     }
 }
 
@@ -139,8 +140,8 @@ component MenuItem inherits Rectangle {
     in property <bool> danger: false;
     callback clicked;
 
-    height: 32px;
-    border-radius: 6px;
+    height: 36px;
+    border-radius: 8px;
     background: touch.has-hover ? (danger ? #ed333b.with-alpha(0.1) : Palette.foreground.with-alpha(0.05)) : transparent;
 
     HorizontalLayout {
@@ -178,18 +179,18 @@ component ContextMenu inherits Rectangle {
     callback advanced(string);
     callback closed;
 
-    width: 160px;
+    width: 180px;
     height: menu-layout.preferred-height;
     background: Palette.card-bg;
-    border-radius: 8px;
+    border-radius: 12px;
     border-width: 1px;
     border-color: Palette.separator;
-    drop-shadow-blur: 15px;
-    drop-shadow-color: rgba(0,0,0,0.5);
+    drop-shadow-blur: 20px;
+    drop-shadow-color: rgba(0,0,0,0.6);
 
     menu-layout := VerticalLayout {
-        padding: 4px;
-        spacing: 2px;
+        padding: 6px;
+        spacing: 4px;
         
         MenuItem {
             text: "Info";
@@ -280,8 +281,10 @@ export component AppWindow inherits Window {
     );
 
     title: "AuraLink";
-    width: 380px;
-    height: 640px;
+    min-width: 400px;
+    max-width: 400px;
+    min-height: 647px;
+    max-height: 647px;
     background: Palette.background;
     default-font-family: "JetBrainsMono Nerd Font";
     no-frame: true;
@@ -311,17 +314,21 @@ export component AppWindow inherits Window {
 
         // Header
         HorizontalLayout {
+            padding-bottom: 8px;
             VerticalLayout {
                 Text {
-                    text: "AuraLink";
-                    font-size: 20px;
-                    font-weight: 700;
-                    color: Palette.foreground;
+                    text: "AURA//LINK";
+                    font-size: 22px;
+                    font-weight: 900;
+                    color: Palette.accent;
+                    letter-spacing: 2px;
                 }
                 Text {
-                    text: status_msg;
-                    font-size: 12px;
+                    text: "SYS.STATUS: " + status_msg;
+                    font-size: 10px;
+                    font-weight: 700;
                     color: Palette.secondary-fg;
+                    letter-spacing: 1px;
                 }
             }
             
@@ -350,8 +357,8 @@ export component AppWindow inherits Window {
 
         if (show_settings) : Rectangle {
             background: Palette.card-bg;
-            border-radius: 12px;
-            height: 140px;
+            border-radius: 16px;
+            height: 150px;
             
             VerticalLayout {
                 padding: 12px;
@@ -390,157 +397,182 @@ export component AppWindow inherits Window {
 
                 // Wi-Fi Section
                 VerticalLayout {
-                    spacing: 4px;
+                    spacing: 8px;
                     Text {
-                        text: "WI-FI NETWORKS";
-                        font-size: 11px;
-                        font-weight: 800;
+                        text: "NETWORK SIGNATURES";
+                        font-size: 10px;
+                        font-weight: 900;
                         color: Palette.secondary-fg;
-                        letter-spacing: 1px;
+                        letter-spacing: 2px;
                     }
 
                     VerticalLayout {
-                        spacing: 0px;
-                        for net[idx] in networks : VerticalLayout {
-                            spacing: 0px;
-                            Rectangle {
-                                background: net.connected ? Palette.accent.with-alpha(0.1) : (touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent);
-                                border-radius: 8px;
-                                
-                                touch := TouchArea {
-                                    clicked => {
-                                        if (net.connected) {
-                                            expand_network(net.ssid == expanded_ssid ? "" : net.ssid);
-                                        }
-                                    }
-                                }
-
-                                VerticalLayout {
-                                    padding: 12px;
-                                    spacing: 8px;
-
-                                    HorizontalLayout {
-                                        VerticalLayout {
-                                            HorizontalLayout {
-                                                spacing: 4px;
-                                                Text {
-                                                    text: net.ssid;
-                                                    font-size: 14px;
-                                                    font-weight: 700;
-                                                    color: Palette.foreground;
-                                                }
-                                                if (net.saved) : Text {
-                                                    text: "󰌆";
-                                                    font-size: 11px;
-                                                    color: Palette.secondary-fg;
-                                                    vertical-alignment: center;
-                                                }
-                                            }
-                                            HorizontalLayout {
-                                                spacing: 4px;
-                                                Text {
-                                                    text: net.icon;
-                                                    font-size: 16px;
-                                                    color: net.icon_color;
-                                                }
-                                                HorizontalLayout {
-                                                    spacing: 4px;
-                                                    Text {
-                                                        text: net.signal + "%";
-                                                        font-size: 12px;
-                                                        font-weight: 700;
-                                                        color: Palette.foreground;
-                                                    }
-                                                    Text {
-                                                        text: "•";
-                                                        font-size: 12px;
-                                                        color: Palette.secondary-fg;
-                                                    }
-                                                    Text {
-                                                        text: net.security;
-                                                        font-size: 11px;
-                                                        color: Palette.secondary-fg;
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        HorizontalLayout {
-                                            alignment: end;
-                                            spacing: 12px;
-                                            
-                                            VerticalLayout {
-                                                alignment: center;
-                                                Rectangle {
-                                                    width: 24px;
-                                                    height: 24px;
-                                                    background: context-touch.has-hover ? Palette.foreground.with-alpha(0.1) : transparent;
-                                                    border-radius: 12px;
-                                                    Text { text: "󰇘"; font-size: 18px; color: Palette.foreground; }
-                                                    context-touch := TouchArea {
-                                                        clicked => {
-                                                            context_ssid = net.ssid;
-                                                            context_is_saved = net.saved;
-                                                            context_is_connected = net.connected;
-                                                            context_menu_x = self.absolute-position.x - 140px;
-                                                            context_menu_y = self.absolute-position.y + 20px;
-                                                            show_context_menu = true;
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            VerticalLayout {
-                                                alignment: center;
-                                                if (net.connected) : HorizontalLayout {
-                                                    spacing: 12px;
-                                                    alignment: center;
-                                                    Text {
-                                                        text: net.ping;
-                                                        font-weight: 700;
-                                                        color: #2ec27e;
-                                                        vertical-alignment: center;
-                                                    }
-                                                    ActionButton {
-                                                        text: "Disconnect";
-                                                        primary: false;
-                                                        danger: true;
-                                                        width: 80px;
-                                                        clicked => { disconnect(); }
-                                                    }
-                                                }
-                                                if (!net.connected) : ActionButton {
-                                                    text: "Connect";
-                                                    enabled: !is_connecting;
-                                                    width: 80px;
-                                                    clicked => { connect(net.ssid, ""); }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    if (net.ssid == expanded_ssid) : VerticalLayout {
-                                        spacing: 8px;
-                                        SpeedGraph {
-                                            height: 140px;
-                                            download_points: download_history;
-                                            upload_points: upload_history;
-                                            max_val: max_speed;
-                                        }
-                                        HorizontalLayout {
-                                            spacing: 12px;
-                                            Text { text: "⬇ " + current_download; color: #00bfff; font-weight: 700; }
-                                            Text { text: "⬆ " + current_upload; color: #ff4500; font-weight: 700; }
-                                        }
+                        spacing: 8px;
+                        for net[idx] in networks : Rectangle {
+                            background: net.connected ? Palette.accent.with-alpha(0.1) : (touch.has-hover ? Palette.card-bg.brighter(10%) : Palette.card-bg);
+                            border-radius: 6px;
+                            border-width: 1px;
+                            border-color: net.connected ? Palette.accent : (touch.has-hover ? Palette.separator.brighter(20%) : Palette.separator);
+                            animate background { duration: 200ms; easing: ease-in-out; }
+                            animate border-color { duration: 200ms; easing: ease-in-out; }
+                            
+                            touch := TouchArea {
+                                clicked => {
+                                    if (net.connected) {
+                                        expand_network(net.ssid == expanded_ssid ? "" : net.ssid);
                                     }
                                 }
                             }
-                            if (idx < networks.length - 1) : HorizontalLayout {
-                                padding-left: 12px;
-                                padding-right: 12px;
-                                Rectangle {
-                                    height: 1px;
-                                    background: Palette.separator;
+
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 8px;
+
+                                HorizontalLayout {
+                                    spacing: 16px;
+                                    
+                                    // 1. Icon
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 32px;
+                                        Text {
+                                            text: net.icon;
+                                            font-size: 22px;
+                                            color: net.icon_color;
+                                            horizontal-alignment: center;
+                                        }
+                                    }
+
+                                    // 2. Details
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: 4px;
+                                        
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            alignment: start;
+                                            Text {
+                                                text: net.ssid;
+                                                font-size: 14px;
+                                                font-weight: 800;
+                                                color: Palette.foreground;
+                                            }
+                                            if (net.saved) : Text {
+                                                text: "󰌆";
+                                                font-size: 12px;
+                                                color: Palette.accent;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                        
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            alignment: start;
+                                            Text {
+                                                text: net.signal + "% STR";
+                                                font-size: 10px;
+                                                font-weight: 800;
+                                                color: Palette.secondary-fg;
+                                                vertical-alignment: center;
+                                            }
+                                            Text {
+                                                text: "///";
+                                                font-size: 10px;
+                                                color: Palette.separator;
+                                                vertical-alignment: center;
+                                            }
+                                            if (net.security != "" && net.security != "--") : Rectangle {
+                                                background: Palette.accent.with-alpha(0.15);
+                                                border-radius: 4px;
+                                                border-width: 1px;
+                                                border-color: Palette.accent.with-alpha(0.3);
+                                                HorizontalLayout {
+                                                    padding-left: 6px;
+                                                    padding-right: 6px;
+                                                    padding-top: 2px;
+                                                    padding-bottom: 2px;
+                                                    Text {
+                                                        text: net.security;
+                                                        font-size: 9px;
+                                                        font-weight: 800;
+                                                        color: Palette.accent;
+                                                        letter-spacing: 0.5px;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    Rectangle {} // Flexible Spacer
+                                    
+                                    // 3. Actions
+                                    HorizontalLayout {
+                                        alignment: end;
+                                        spacing: 12px;
+                                        
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Rectangle {
+                                                width: 24px;
+                                                height: 24px;
+                                                background: context-touch.has-hover ? Palette.foreground.with-alpha(0.1) : transparent;
+                                                border-radius: 4px;
+                                                Text { text: "󰇘"; font-size: 18px; color: Palette.foreground; }
+                                                context-touch := TouchArea {
+                                                    clicked => {
+                                                        context_ssid = net.ssid;
+                                                        context_is_saved = net.saved;
+                                                        context_is_connected = net.connected;
+                                                        context_menu_x = self.absolute-position.x - 140px;
+                                                        context_menu_y = self.absolute-position.y + 20px;
+                                                        show_context_menu = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        VerticalLayout {
+                                            alignment: center;
+                                            if (net.connected) : HorizontalLayout {
+                                                spacing: 12px;
+                                                alignment: center;
+                                                Text {
+                                                    text: net.ping;
+                                                    font-weight: 800;
+                                                    color: Palette.accent;
+                                                    vertical-alignment: center;
+                                                }
+                                                ActionButton {
+                                                    text: "DISCONNECT";
+                                                    primary: false;
+                                                    danger: true;
+                                                    width: 90px;
+                                                    clicked => { disconnect(); }
+                                                }
+                                            }
+                                            if (!net.connected) : ActionButton {
+                                                text: "CONNECT";
+                                                enabled: !is_connecting;
+                                                width: 90px;
+                                                clicked => { connect(net.ssid, ""); }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (net.ssid == expanded_ssid) : VerticalLayout {
+                                    spacing: 8px;
+                                    SpeedGraph {
+                                        height: 140px;
+                                        download_points: download_history;
+                                        upload_points: upload_history;
+                                        max_val: max_speed;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 12px;
+                                        Text { text: "⬇ " + current_download; color: Palette.accent; font-weight: 800; font-size: 10px; }
+                                        Text { text: "⬆ " + current_upload; color: #ff0055; font-weight: 800; font-size: 10px; }
+                                    }
                                 }
                             }
                         }
@@ -549,76 +581,76 @@ export component AppWindow inherits Window {
 
                 // VPN Section
                 if (vpns.length > 0) : VerticalLayout {
-                    spacing: 4px;
-                    
+                    spacing: 8px;
+
                     VerticalLayout {
-                        padding-top: 4px;
+                        padding-top: 12px;
                         padding-bottom: 4px;
-                        Rectangle {
-                            height: 1px;
-                            background: Palette.separator;
+                        Text {
+                            text: "SECURE TUNNELS";
+                            font-size: 10px;
+                            font-weight: 900;
+                            color: Palette.secondary-fg;
+                            letter-spacing: 2px;
                         }
                     }
-
-                    Text {
-                        text: "VPNs & PROXIES";
-                        font-size: 11px;
-                        font-weight: 800;
-                        color: Palette.secondary-fg;
-                        letter-spacing: 1px;
-                    }
                     
                     VerticalLayout {
-                        spacing: 0px;
-                        for vpn[idx] in vpns : VerticalLayout {
-                            spacing: 0px;
-                            Rectangle {
-                                background: vpn-touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent;
-                                border-radius: 8px;
-                                height: 44px;
-                                
-                                vpn-touch := TouchArea {}
+                        spacing: 8px;
+                        for vpn[idx] in vpns : Rectangle {
+                            background: vpn-touch.has-hover ? Palette.card-bg.brighter(10%) : Palette.card-bg;
+                            border-radius: 6px;
+                            border-width: 1px;
+                            border-color: vpn.active ? Palette.accent : (vpn-touch.has-hover ? Palette.separator.brighter(20%) : Palette.separator);
+                            height: 50px;
+                            animate background { duration: 200ms; easing: ease-in-out; }
+                            animate border-color { duration: 200ms; easing: ease-in-out; }
+                            
+                            vpn-touch := TouchArea {}
 
-                                HorizontalLayout {
-                                    padding-left: 12px;
-                                    padding-right: 12px;
-                                    
+                            HorizontalLayout {
+                                padding-left: 16px;
+                                padding-right: 16px;
+                                spacing: 16px;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    Text { text: "󰖂"; font-size: 20px; color: vpn.active ? Palette.accent : Palette.secondary-fg; }
+                                }
+                                
+                                VerticalLayout {
+                                    alignment: center;
                                     Text {
                                         text: vpn.name;
                                         font-size: 13px;
-                                        font-weight: 600;
+                                        font-weight: 800;
                                         color: Palette.foreground;
-                                        vertical-alignment: center;
-                                    }
-                                    
-                                    Rectangle {} // Spacer
-
-                                    HorizontalLayout {
-                                        spacing: 12px;
-                                        VerticalLayout {
-                                            alignment: center;
-                                            Text {
-                                                text: vpn.type-name;
-                                                font-size: 10px;
-                                                color: Palette.secondary-fg;
-                                            }
-                                        }
-                                        VerticalLayout {
-                                            alignment: center;
-                                            ThemeToggle {
-                                                checked: vpn.active;
-                                                toggled(active) => { toggle_vpn(vpn.name, vpn.type-name, active); }
-                                            }
-                                        }
                                     }
                                 }
-                            }
-                            if (idx < vpns.length - 1) : HorizontalLayout {
-                                padding-left: 12px;
-                                padding-right: 12px;
-                                Rectangle {
-                                    height: 1px;
-                                    background: Palette.separator;
+                                
+                                Rectangle {} // Flexible Spacer
+
+                                HorizontalLayout {
+                                    spacing: 16px;
+                                    alignment: end;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Text {
+                                            text: vpn.type-name;
+                                            font-size: 10px;
+                                            font-weight: 800;
+                                            color: Palette.secondary-fg;
+                                            letter-spacing: 1px;
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        ThemeToggle {
+                                            checked: vpn.active;
+                                            toggled(active) => { toggle_vpn(vpn.name, vpn.type-name, active); }
+                                        }
+                                    }
                                 }
                             }
                         }

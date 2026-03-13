@@ -1,8 +1,0 @@
-Package: auralink
-Version: 0.1.0
-Section: net
-Priority: optional
-Architecture: amd64
-Maintainer: rajchauhan28
-Description: A modern, lightweight, and aesthetic Wi-Fi and VPN manager for Linux.
- Built with Rust and Slint, features live Pywal sync.
