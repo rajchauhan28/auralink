@@ -11,6 +11,7 @@ pub struct Network {
     pub connected: bool,
     pub ping: Option<u64>,
     pub saved: bool,
+    pub is_ethernet: bool,
 }
 
 pub fn list_networks() -> Vec<Network> {
@@ -25,6 +26,28 @@ pub fn list_networks() -> Vec<Network> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut networks = Vec::new();
     let mut seen_ssids = HashSet::new();
+
+    // Add Ethernet connections first
+    if let Ok(eth_output) = Command::new("nmcli")
+        .args(&["-t", "-f", "NAME,TYPE,STATE,DEVICE", "con", "show", "--active"])
+        .output() {
+        let eth_stdout = String::from_utf8_lossy(&eth_output.stdout);
+        for line in eth_stdout.lines() {
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() >= 4 && (parts[1] == "802-3-ethernet" || parts[1] == "ethernet") {
+                networks.push(Network {
+                    ssid: parts[0].to_string(),
+                    bssid: parts[3].to_string(), // Use device name as BSSID for ethernet
+                    signal: 100,
+                    security: "Wired".to_string(),
+                    connected: true,
+                    ping: None,
+                    saved: true,
+                    is_ethernet: true,
+                });
+            }
+        }
+    }
 
     for line in stdout.lines() {
         let mut parts = Vec::new();
@@ -61,6 +84,7 @@ pub fn list_networks() -> Vec<Network> {
                 connected: is_connected,
                 ping: None,
                 saved: is_saved,
+                is_ethernet: false,
             });
             seen_ssids.insert(ssid);
         }
@@ -68,6 +92,7 @@ pub fn list_networks() -> Vec<Network> {
     
     networks.sort_by(|a, b| {
         b.connected.cmp(&a.connected)
+            .then_with(|| b.is_ethernet.cmp(&a.is_ethernet))
             .then_with(|| b.saved.cmp(&a.saved))
             .then_with(|| b.signal.cmp(&a.signal))
     });
@@ -108,7 +133,7 @@ fn get_saved_ssids() -> HashSet<String> {
         let stdout = String::from_utf8_lossy(&o.stdout);
         for line in stdout.lines() {
             let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() >= 2 && parts[1].contains("wireless") {
+            if parts.len() >= 2 && (parts[1].contains("wireless") || parts[1].contains("ethernet")) {
                 saved.insert(parts[0].to_string());
             }
         }
@@ -286,6 +311,7 @@ pub struct NetworkConfig {
 
 pub fn get_network_config(ssid: &str) -> Option<NetworkConfig> {
     let fields = [
+        "connection.type",
         "connection.autoconnect",
         "connection.autoconnect-priority",
         "ipv4.dns",
@@ -297,6 +323,7 @@ pub fn get_network_config(ssid: &str) -> Option<NetworkConfig> {
         "ipv6.gateway",
         "802-11-wireless.cloned-mac-address",
         "802-11-wireless-security.psk",
+        "802-3-ethernet.cloned-mac-address",
     ];
 
     let output = Command::new("nmcli")
@@ -321,10 +348,12 @@ pub fn get_network_config(ssid: &str) -> Option<NetworkConfig> {
         password: String::new(),
     };
     
+    let mut is_eth = false;
     for line in stdout.lines() {
         let parts: Vec<&str> = line.split(':').collect();
         if parts.len() < 2 { continue; }
         match parts[0] {
+            "connection.type" => is_eth = parts[1].contains("ethernet"),
             "connection.autoconnect" => config.autoconnect = parts[1] == "yes",
             "connection.autoconnect-priority" => config.priority = parts[1].parse().unwrap_or(0),
             "ipv4.dns" => config.dns = parts[1].to_string(),
@@ -334,7 +363,8 @@ pub fn get_network_config(ssid: &str) -> Option<NetworkConfig> {
             "ipv6.method" => config.ipv6_method = parts[1].to_string(),
             "ipv6.addresses" => config.ipv6_address = parts[1].to_string(),
             "ipv6.gateway" => config.ipv6_gateway = parts[1].to_string(),
-            "802-11-wireless.cloned-mac-address" => config.mac_address = parts[1].to_string(),
+            "802-11-wireless.cloned-mac-address" => if !is_eth { config.mac_address = parts[1].to_string() },
+            "802-3-ethernet.cloned-mac-address" => if is_eth { config.mac_address = parts[1].to_string() },
             "802-11-wireless-security.psk" => config.password = parts[1].to_string(),
             _ => {}
         }
@@ -380,12 +410,20 @@ pub fn update_network_config(ssid: &str, config: NetworkConfig) -> bool {
         args.push(config.ipv6_gateway);
     }
 
+    // Determine connection type for MAC address field
+    let is_eth = Command::new("nmcli")
+        .args(&["-t", "-f", "connection.type", "connection", "show", ssid])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("ethernet"))
+        .unwrap_or(false);
+
     if !config.mac_address.is_empty() {
-        args.push("802-11-wireless.cloned-mac-address".to_string());
+        let field = if is_eth { "802-3-ethernet.cloned-mac-address" } else { "802-11-wireless.cloned-mac-address" };
+        args.push(field.to_string());
         args.push(config.mac_address);
     }
     
-    if !config.password.is_empty() {
+    if !is_eth && !config.password.is_empty() {
         args.push("802-11-wireless-security.psk".to_string());
         args.push(config.password);
     }
@@ -421,13 +459,20 @@ pub fn get_active_interface() -> Option<String> {
         .ok()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut wifi_iface = None;
+    
     for line in stdout.lines() {
         let parts: Vec<&str> = line.split(':').collect();
-        if parts.len() >= 3 && parts[1] == "wifi" && parts[2] == "connected" {
-            return Some(parts[0].to_string());
+        if parts.len() >= 3 && parts[2] == "connected" {
+            if parts[1] == "802-3-ethernet" || parts[1] == "ethernet" {
+                return Some(parts[0].to_string());
+            }
+            if parts[1] == "wifi" {
+                wifi_iface = Some(parts[0].to_string());
+            }
         }
     }
-    None
+    wifi_iface
 }
 
 pub fn get_interface_stats(iface: &str) -> Option<(u64, u64)> {

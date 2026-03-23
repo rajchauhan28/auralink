@@ -6,7 +6,10 @@ use std::time::{Duration, Instant};
 use std::collections::VecDeque;
 use rfd::FileDialog;
 
-slint::include_modules!();
+mod ui {
+    include!(concat!(env!("OUT_DIR"), "/wifi.rs"));
+}
+use ui::*;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct AppConfig {
@@ -66,7 +69,7 @@ fn parse_hex(hex: &str) -> Option<Color> {
     }
 }
 
-fn apply_pywal_theme(handle: slint::Weak<AppWindow>) {
+fn apply_pywal_theme(handle: slint::Weak<WifiWindow>) {
     let home = std::env::var("HOME").unwrap_or_default();
     let path = format!("{}/.cache/wal/colors.json", home);
     
@@ -88,7 +91,7 @@ fn apply_pywal_theme(handle: slint::Weak<AppWindow>) {
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = handle.upgrade() {
-                    let palette = ui.global::<Palette>();
+                    let palette = ui.global::<WifiPalette>();
                     palette.set_background(bg);
                     palette.set_foreground(fg);
                     palette.set_accent(accent);
@@ -103,7 +106,7 @@ fn apply_pywal_theme(handle: slint::Weak<AppWindow>) {
 
 #[tokio::main]
 async fn main() -> Result<(), slint::PlatformError> {
-    let main_window = AppWindow::new()?;
+    let main_window = WifiWindow::new()?;
     let config = Arc::new(Mutex::new(AppConfig::load()));
     let force_refresh = Arc::new(AtomicBool::new(false));
     
@@ -132,8 +135,8 @@ async fn main() -> Result<(), slint::PlatformError> {
                 let handle = window_weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = handle.upgrade() {
-                        let p = ui.global::<Palette>();
-                        p.set_background(parse_hex("#09090b").unwrap());
+                        let p = ui.global::<WifiPalette>();
+                        p.set_background(parse_hex("#09090b88").unwrap());
                         p.set_card_bg(parse_hex("#18181b").unwrap());
                         p.set_accent(parse_hex("#00f0ff").unwrap());
                         p.set_foreground(parse_hex("#f8fafc").unwrap());
@@ -310,13 +313,14 @@ async fn main() -> Result<(), slint::PlatformError> {
                 }
             }
 
-            let slint_networks: Vec<NetworkItem> = networks.into_iter().map(|n| {
-                let (icon, icon_color) = if n.signal > 75 { ("󰤨", Color::from_rgb_u8(46, 194, 126)) }
+            let slint_networks: Vec<WifiNetworkItem> = networks.into_iter().map(|n| {
+                let (icon, icon_color) = if n.is_ethernet { ("󰈀", Color::from_rgb_u8(46, 194, 126)) }
+                                         else if n.signal > 75 { ("󰤨", Color::from_rgb_u8(46, 194, 126)) }
                                          else if n.signal > 50 { ("󰤥", Color::from_rgb_u8(245, 194, 17)) }
                                          else if n.signal > 25 { ("󰤢", Color::from_rgb_u8(255, 165, 0)) }
                                          else { ("󰤟", Color::from_rgb_u8(237, 51, 59)) };
                 
-                NetworkItem {
+                WifiNetworkItem {
                     ssid: n.ssid.into(),
                     signal: n.signal as i32,
                     security: n.security.into(),
@@ -325,12 +329,13 @@ async fn main() -> Result<(), slint::PlatformError> {
                     ping: n.ping.map(|p| format!("{} ms", p)).unwrap_or_default().into(),
                     icon: icon.into(),
                     icon_color,
+                    is_ethernet: n.is_ethernet,
                 }
             }).collect();
 
             let vpns = nm_backend::list_vpns();
-            let slint_vpns: Vec<VpnItem> = vpns.into_iter().map(|v| {
-                VpnItem {
+            let slint_vpns: Vec<WifiVpnItem> = vpns.into_iter().map(|v| {
+                WifiVpnItem {
                     name: v.name.into(),
                     active: v.active,
                     type_name: v.vpn_type.into(),

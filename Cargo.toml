@@ -8,6 +8,10 @@ edition = "2024"
 name = "auralink"
 path = "src/main.rs"
 
+[[bin]]
+name = "auralink-bt"
+path = "src/bt_main.rs"
+
 [package.metadata.deb]
 name = "auralink"
 maintainer = "rajchauhan28"

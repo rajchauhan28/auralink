@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=AuraLink
+Comment=Manage Wi-Fi and VPN connections with style
+Exec=auralink
+Icon=auralink
+Terminal=false
+Type=Application
+Categories=Network;Settings;
+StartupNotify=true
+StartupWMClass=auralink

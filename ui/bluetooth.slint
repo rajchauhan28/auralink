@@ -1,0 +1,514 @@
+import { ScrollView, LineEdit, Button, CheckBox } from "std-widgets.slint";
+
+export struct AudioProfile {
+    name: string,
+    description: string,
+    active: bool,
+    available: bool,
+}
+
+export struct BluetoothDevice {
+    name: string,
+    address: string,
+    connected: bool,
+    paired: bool,
+    trusted: bool,
+    rssi: int,
+    icon: string,
+    icon_color: color,
+    audio_profiles: [AudioProfile],
+}
+
+export global Palette {
+    in-out property <color> background: #09090b88; // 50% opacity for glassmorphism
+    in-out property <color> card-bg: #18181b;
+    in-out property <color> accent: #00f0ff;
+    in-out property <color> foreground: #f8fafc;
+    in-out property <color> secondary-fg: #a1a1aa;
+    in-out property <color> separator: #27272a;
+}
+
+component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: true;
+    in property <bool> enabled: true;
+    in property <bool> danger: false;
+    callback clicked;
+    
+    height: 28px;
+    background: primary ? (enabled ? Palette.accent : Palette.accent.with-alpha(0.3)) : transparent;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: danger ? #ff0055.with-alpha(0.8) : Palette.accent.with-alpha(0.8);
+    
+    states [
+        hover when touch.has-hover && enabled : {
+            background: primary ? Palette.accent.brighter(20%) : (danger ? #ff0055.with-alpha(0.2) : Palette.accent.with-alpha(0.2));
+        }
+        pressed when touch.pressed && enabled : {
+            background: primary ? Palette.accent.darker(20%) : (danger ? #ff0055.with-alpha(0.4) : Palette.accent.with-alpha(0.4));
+        }
+    ]
+
+    touch := TouchArea {
+        clicked => { if (enabled) { root.clicked(); } }
+    }
+
+    Text {
+        text: root.text;
+        color: primary ? Palette.background : (danger ? #ff0055 : Palette.accent);
+        font-size: 10px;
+        font-weight: 900;
+        letter-spacing: 1.5px;
+    }
+}
+
+component ThemeToggle inherits Rectangle {
+    in property <string> text;
+    in-out property <bool> checked;
+    callback toggled(bool);
+
+    height: 28px;
+    
+    HorizontalLayout {
+        spacing: 12px;
+        alignment: start;
+        
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 40px;
+                height: 20px;
+                background: root.checked ? Palette.accent : Palette.foreground.with-alpha(0.1);
+                border-radius: 10px;
+                
+                Rectangle {
+                    x: root.checked ? 22px : 2px;
+                    y: 2px;
+                    width: 16px;
+                    height: 16px;
+                    background: white;
+                    border-radius: 8px;
+                    animate x { duration: 250ms; easing: ease-in-out; }
+                }
+            }
+        }
+        
+        if (root.text != "") : Text {
+            text: root.text;
+            color: Palette.foreground;
+            font-size: 13px;
+            font-weight: 500;
+            vertical-alignment: center;
+        }
+    }
+    
+    TouchArea {
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}
+
+component MenuItem inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> danger: false;
+    callback clicked;
+
+    height: 36px;
+    border-radius: 8px;
+    background: touch.has-hover ? (danger ? #ed333b.with-alpha(0.1) : Palette.foreground.with-alpha(0.05)) : transparent;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+        
+        Text {
+            text: root.icon;
+            color: danger ? #ed333b : Palette.secondary-fg;
+            font-size: 14px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.text;
+            color: danger ? #ed333b : Palette.foreground;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component ContextMenu inherits Rectangle {
+    in property <string> address;
+    in property <bool> is_paired;
+    in property <bool> is_trusted;
+    
+    callback toggle_trust(string, bool);
+    callback toggle_pair(string, bool);
+    callback remove(string);
+    callback closed;
+
+    width: 180px;
+    height: menu-layout.preferred-height;
+    background: Palette.card-bg;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Palette.separator;
+    drop-shadow-blur: 20px;
+    drop-shadow-color: rgba(0,0,0,0.6);
+
+    menu-layout := VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+        
+        MenuItem {
+            text: is_trusted ? "Untrust" : "Trust";
+            icon: is_trusted ? "󰗚" : "󰗙";
+            clicked => { root.toggle_trust(root.address, !root.is_trusted); root.closed(); }
+        }
+        
+        MenuItem {
+            text: is_paired ? "Unpair" : "Pair";
+            icon: "󰒄";
+            clicked => { root.toggle_pair(root.address, !root.is_paired); root.closed(); }
+        }
+        
+        MenuItem {
+            text: "Remove";
+            icon: "󰆴";
+            danger: true;
+            clicked => { root.remove(root.address); root.closed(); }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    in property <[BluetoothDevice]> devices;
+    in property <string> status_msg: "Ready";
+    in property <bool> is_scanning: false;
+    in property <bool> show_settings: false;
+    in property <bool> pywal_enabled: false;
+    in property <bool> bluetooth_enabled: true;
+    in property <string> expanded_address: "";
+
+    callback connect(string);
+    callback disconnect(string);
+    callback refresh();
+    callback toggle_settings();
+    callback toggle_pywal(bool);
+    callback toggle_bluetooth(bool);
+    
+    callback toggle_trust(string, bool);
+    callback toggle_pair(string, bool);
+    callback remove_device(string);
+    callback select_audio_profile(string, string);
+    callback expand_device(string);
+
+    title: "AuraLink Bluetooth";
+    min-width: 400px;
+    max-width: 400px;
+    min-height: 600px;
+    max-height: 600px;
+    background: Palette.background;
+    default-font-family: "JetBrainsMono Nerd Font";
+    no-frame: true;
+    always-on-top: true;
+
+    property <length> context_menu_x: 0;
+    property <length> context_menu_y: 0;
+    in-out property <bool> show_context_menu: false;
+    property <string> context_address: "";
+    property <bool> context_is_paired: false;
+    property <bool> context_is_trusted: false;
+
+    // Overlay handler
+    TouchArea {
+        width: 100%; height: 100%;
+        visible: show_context_menu;
+        clicked => { 
+            show_context_menu = false; 
+        }
+    }
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 12px;
+
+        // Header
+        HorizontalLayout {
+            padding-bottom: 8px;
+            VerticalLayout {
+                Text {
+                    text: "AURA//BT";
+                    font-size: 22px;
+                    font-weight: 900;
+                    color: Palette.accent;
+                    letter-spacing: 2px;
+                }
+                Text {
+                    text: "SYS.STATUS: " + status_msg;
+                    font-size: 10px;
+                    font-weight: 700;
+                    color: Palette.secondary-fg;
+                    letter-spacing: 1px;
+                }
+            }
+            
+            HorizontalLayout {
+                alignment: end;
+                spacing: 8px;
+                
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    background: Palette.card-bg;
+                    border-radius: 8px;
+                    Text { text: "󰑐"; font-size: 16px; color: Palette.foreground; }
+                    TouchArea { clicked => { refresh(); } }
+                }
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    background: Palette.card-bg;
+                    border-radius: 8px;
+                    Text { text: "⚙"; font-size: 16px; color: Palette.foreground; }
+                    TouchArea { clicked => { toggle_settings(); } }
+                }
+            }
+        }
+
+        if (show_settings) : Rectangle {
+            background: Palette.card-bg;
+            border-radius: 16px;
+            height: 100px;
+            
+            VerticalLayout {
+                padding: 12px;
+                spacing: 12px;
+                
+                ThemeToggle {
+                    text: "Pywal Auto-Sync";
+                    checked: pywal_enabled;
+                    toggled(enabled) => { toggle_pywal(enabled); }
+                }
+
+                ThemeToggle {
+                    text: "Bluetooth Power";
+                    checked: bluetooth_enabled;
+                    toggled(enabled) => { toggle_bluetooth(enabled); }
+                }
+            }
+        }
+
+        ScrollView {
+            VerticalLayout {
+                spacing: 16px;
+                alignment: start;
+
+                // Devices Section
+                VerticalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: "DISCOVERED DEVICES";
+                        font-size: 10px;
+                        font-weight: 900;
+                        color: Palette.secondary-fg;
+                        letter-spacing: 2px;
+                    }
+
+                    VerticalLayout {
+                        spacing: 8px;
+                        for dev[idx] in devices : Rectangle {
+                            background: dev.connected ? Palette.accent.with-alpha(0.1) : (touch.has-hover ? Palette.card-bg.brighter(10%) : Palette.card-bg);
+                            border-radius: 6px;
+                            border-width: 1px;
+                            border-color: dev.connected ? Palette.accent : (touch.has-hover ? Palette.separator.brighter(20%) : Palette.separator);
+                            animate background { duration: 200ms; easing: ease-in-out; }
+                            animate border-color { duration: 200ms; easing: ease-in-out; }
+                            
+                            touch := TouchArea {
+                                clicked => {
+                                    if (dev.connected) {
+                                        expand_device(dev.address == expanded_address ? "" : dev.address);
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 8px;
+
+                                HorizontalLayout {
+                                    spacing: 16px;
+                                    
+                                    // 1. Icon
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 32px;
+                                        Text {
+                                            text: dev.icon;
+                                            font-size: 22px;
+                                            color: dev.icon_color;
+                                            horizontal-alignment: center;
+                                        }
+                                    }
+
+                                    // 2. Details
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: 4px;
+                                        
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            alignment: start;
+                                            Text {
+                                                text: dev.name != "" ? dev.name : dev.address;
+                                                font-size: 14px;
+                                                font-weight: 800;
+                                                color: Palette.foreground;
+                                            }
+                                            if (dev.paired) : Text {
+                                                text: "󰒄";
+                                                font-size: 12px;
+                                                color: Palette.accent;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                        
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            alignment: start;
+                                            Text {
+                                                text: dev.address;
+                                                font-size: 10px;
+                                                font-weight: 800;
+                                                color: Palette.secondary-fg;
+                                                vertical-alignment: center;
+                                            }
+                                            if (dev.rssi != 0) : Text {
+                                                text: "/// " + dev.rssi + " dBm";
+                                                font-size: 10px;
+                                                color: Palette.separator;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                    
+                                    Rectangle {} // Flexible Spacer
+                                    
+                                    // 3. Actions
+                                    HorizontalLayout {
+                                        alignment: end;
+                                        spacing: 12px;
+                                        
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Rectangle {
+                                                width: 24px;
+                                                height: 24px;
+                                                background: context-touch.has-hover ? Palette.foreground.with-alpha(0.1) : transparent;
+                                                border-radius: 4px;
+                                                Text { text: "󰇘"; font-size: 18px; color: Palette.foreground; }
+                                                context-touch := TouchArea {
+                                                    clicked => {
+                                                        context_address = dev.address;
+                                                        context_is_paired = dev.paired;
+                                                        context_is_trusted = dev.trusted;
+                                                        context_menu_x = self.absolute-position.x - 140px;
+                                                        context_menu_y = self.absolute-position.y + 20px;
+                                                        show_context_menu = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        VerticalLayout {
+                                            alignment: center;
+                                            if (dev.connected) : ActionButton {
+                                                text: "DISCONNECT";
+                                                primary: false;
+                                                danger: true;
+                                                width: 90px;
+                                                clicked => { disconnect(dev.address); }
+                                            }
+                                            if (!dev.connected) : ActionButton {
+                                                text: "CONNECT";
+                                                width: 90px;
+                                                clicked => { connect(dev.address); }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (dev.address == expanded_address && dev.audio_profiles.length > 0) : VerticalLayout {
+                                    spacing: 8px;
+                                    padding-top: 8px;
+                                    
+                                    Text {
+                                        text: "AUDIO PROFILES";
+                                        font-size: 9px;
+                                        font-weight: 900;
+                                        color: Palette.secondary-fg;
+                                        letter-spacing: 1px;
+                                    }
+
+                                    for profile in dev.audio_profiles : Rectangle {
+                                        height: 32px;
+                                        background: profile.active ? Palette.accent.with-alpha(0.1) : (prof-touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent);
+                                        border-radius: 4px;
+                                        border-width: 1px;
+                                        border-color: profile.active ? Palette.accent.with-alpha(0.5) : transparent;
+                                        
+                                        prof-touch := TouchArea {
+                                            clicked => { select_audio_profile(dev.address, profile.name); }
+                                        }
+
+                                        HorizontalLayout {
+                                            padding-left: 8px;
+                                            padding-right: 8px;
+                                            spacing: 8px;
+                                            
+                                            Text {
+                                                text: profile.active ? "󰄬" : (profile.available ? "󰦝" : "󰂭");
+                                                color: profile.active ? Palette.accent : Palette.secondary-fg;
+                                                vertical-alignment: center;
+                                                font-size: 14px;
+                                            }
+                                            
+                                            Text {
+                                                text: profile.description;
+                                                color: profile.active ? Palette.foreground : Palette.secondary-fg;
+                                                font-size: 11px;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Context Menu Overlay
+    if (show_context_menu) : ContextMenu {
+        x: Math.min(context_menu_x, root.width - self.width - 10px);
+        y: Math.min(context_menu_y, root.height - self.height - 10px);
+        address: context_address;
+        is_paired: context_is_paired;
+        is_trusted: context_is_trusted;
+        toggle_trust(a, t) => { toggle_trust(a, t); }
+        toggle_pair(a, p) => { toggle_pair(a, p); }
+        remove(a) => { remove_device(a); }
+        closed => { show_context_menu = false; }
+    }
+}
