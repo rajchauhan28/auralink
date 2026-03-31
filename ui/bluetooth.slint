@@ -149,13 +149,15 @@ component ContextMenu inherits Rectangle {
     in property <string> address;
     in property <bool> is_paired;
     in property <bool> is_trusted;
-    
+    in property <[AudioProfile]> audio_profiles;
+
     callback toggle_trust(string, bool);
     callback toggle_pair(string, bool);
     callback remove(string);
+    callback select_audio_profile(string, string);
     callback closed;
 
-    width: 180px;
+    width: 220px;
     height: menu-layout.preferred-height;
     background: Palette.card-bg;
     border-radius: 12px;
@@ -163,23 +165,92 @@ component ContextMenu inherits Rectangle {
     border-color: Palette.separator;
     drop-shadow-blur: 20px;
     drop-shadow-color: rgba(0,0,0,0.6);
+    property <bool> show_profiles: false;
 
     menu-layout := VerticalLayout {
         padding: 6px;
         spacing: 4px;
-        
+
+        if (audio_profiles.length > 0 && !root.show_profiles) : MenuItem {
+            text: "Audio profiles";
+            icon: "󰋋";
+            clicked => { root.show_profiles = true; }
+        }
+
+        if (audio_profiles.length > 0 && root.show_profiles) : Rectangle {
+            background: Palette.foreground.with-alpha(0.05);
+            border-radius: 8px;
+            height: audio_profiles_layout.preferred-height + 12px;
+            width: 208px;
+
+            audio_profiles_layout := VerticalLayout {
+                padding: 6px;
+                spacing: 4px;
+
+                TouchArea {
+                    clicked => { root.show_profiles = false; }
+                    height: 16px;
+                    Text {
+                        text: "Audio profiles";
+                        font-size: 9px;
+                        font-weight: 900;
+                        color: Palette.secondary-fg;
+                        letter-spacing: 1px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                for profile in audio_profiles : Rectangle {
+                    height: 28px;
+                    background: profile.active ? Palette.accent.with-alpha(0.1) : (prof-touch.has-hover ? Palette.foreground.with-alpha(0.05) : transparent);
+                    border-radius: 4px;
+
+                    prof-touch := TouchArea {
+                        clicked => { root.select_audio_profile(root.address, profile.name); root.closed(); }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        spacing: 6px;
+
+                        Text {
+                            text: profile.active ? "󰄬" : (profile.available ? "󰦝" : "󰂭");
+                            color: profile.active ? Palette.accent : Palette.secondary-fg;
+                            vertical-alignment: center;
+                            font-size: 12px;
+                        }
+
+                        Text {
+                            text: profile.description;
+                            color: profile.active ? Palette.foreground : Palette.secondary-fg;
+                            font-size: 10px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            width: 208px;
+            background: Palette.separator;
+            visible: audio_profiles.length > 0;
+        }
+
         MenuItem {
             text: is_trusted ? "Untrust" : "Trust";
             icon: is_trusted ? "󰗚" : "󰗙";
             clicked => { root.toggle_trust(root.address, !root.is_trusted); root.closed(); }
         }
-        
+
         MenuItem {
             text: is_paired ? "Unpair" : "Pair";
             icon: "󰒄";
             clicked => { root.toggle_pair(root.address, !root.is_paired); root.closed(); }
         }
-        
+
         MenuItem {
             text: "Remove";
             icon: "󰆴";
@@ -227,6 +298,7 @@ export component AppWindow inherits Window {
     property <string> context_address: "";
     property <bool> context_is_paired: false;
     property <bool> context_is_trusted: false;
+    property <[AudioProfile]> context_audio_profiles: [];
 
     // Overlay handler
     TouchArea {
@@ -421,7 +493,8 @@ export component AppWindow inherits Window {
                                                         context_address = dev.address;
                                                         context_is_paired = dev.paired;
                                                         context_is_trusted = dev.trusted;
-                                                        context_menu_x = self.absolute-position.x - 140px;
+                                                        context_audio_profiles = dev.audio_profiles;
+                                                        context_menu_x = self.absolute-position.x - 180px;
                                                         context_menu_y = self.absolute-position.y + 20px;
                                                         show_context_menu = true;
                                                     }
@@ -506,9 +579,11 @@ export component AppWindow inherits Window {
         address: context_address;
         is_paired: context_is_paired;
         is_trusted: context_is_trusted;
+        audio_profiles: context_audio_profiles;
         toggle_trust(a, t) => { toggle_trust(a, t); }
         toggle_pair(a, p) => { toggle_pair(a, p); }
         remove(a) => { remove_device(a); }
+        select_audio_profile(a, p) => { select_audio_profile(a, p); }
         closed => { show_context_menu = false; }
     }
 }

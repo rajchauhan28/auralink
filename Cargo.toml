@@ -22,7 +22,9 @@ section = "net"
 priority = "optional"
 assets = [
     ["target/release/auralink", "usr/bin/auralink", "755"],
+    ["target/release/auralink-bt", "usr/bin/auralink-bt", "755"],
     ["auralink.desktop", "usr/share/applications/auralink.desktop", "644"],
+    ["auralink-bt.desktop", "usr/share/applications/auralink-bt.desktop", "644"],
     ["assets/auralink.svg", "usr/share/icons/hicolor/scalable/apps/auralink.svg", "644"],
 ]
 

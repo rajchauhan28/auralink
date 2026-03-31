@@ -14,6 +14,28 @@ pub struct Network {
     pub is_ethernet: bool,
 }
 
+fn parse_nmcli_line(line: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut escaped = false;
+    
+    for c in line.chars() {
+        if escaped {
+            current.push(c);
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == ':' {
+            parts.push(current.clone());
+            current.clear();
+        } else {
+            current.push(c);
+        }
+    }
+    parts.push(current);
+    parts
+}
+
 pub fn list_networks() -> Vec<Network> {
     let saved_ssids = get_saved_ssids();
     let active_ssid = get_active_ssid();
@@ -33,7 +55,7 @@ pub fn list_networks() -> Vec<Network> {
         .output() {
         let eth_stdout = String::from_utf8_lossy(&eth_output.stdout);
         for line in eth_stdout.lines() {
-            let parts: Vec<&str> = line.split(':').collect();
+            let parts = parse_nmcli_line(line);
             if parts.len() >= 4 && (parts[1] == "802-3-ethernet" || parts[1] == "ethernet") {
                 networks.push(Network {
                     ssid: parts[0].to_string(),
@@ -50,24 +72,7 @@ pub fn list_networks() -> Vec<Network> {
     }
 
     for line in stdout.lines() {
-        let mut parts = Vec::new();
-        let mut current = String::new();
-        let mut escaped = false;
-        
-        for c in line.chars() {
-            if escaped {
-                current.push(c);
-                escaped = false;
-            } else if c == '\\' {
-                escaped = true;
-            } else if c == ':' {
-                parts.push(current.clone());
-                current.clear();
-            } else {
-                current.push(c);
-            }
-        }
-        parts.push(current);
+        let parts = parse_nmcli_line(line);
 
         if parts.len() >= 5 {
             let ssid = parts[0].to_string();
@@ -110,15 +115,8 @@ fn get_active_ssid() -> Option<String> {
         .lines()
         .find(|l| l.starts_with("yes:"))
         .map(|l| {
-            let mut ssid = String::new();
-            let mut escaped = false;
-            let content = &l[4..]; 
-            for c in content.chars() {
-                if escaped { ssid.push(c); escaped = false; }
-                else if c == '\\' { escaped = true; }
-                else { ssid.push(c); }
-            }
-            ssid
+            let parts = parse_nmcli_line(l);
+            parts.get(1).cloned().unwrap_or_default()
         })
 }
 
@@ -132,7 +130,7 @@ fn get_saved_ssids() -> HashSet<String> {
     if let Some(o) = output {
         let stdout = String::from_utf8_lossy(&o.stdout);
         for line in stdout.lines() {
-            let parts: Vec<&str> = line.split(':').collect();
+            let parts = parse_nmcli_line(line);
             if parts.len() >= 2 && (parts[1].contains("wireless") || parts[1].contains("ethernet")) {
                 saved.insert(parts[0].to_string());
             }
@@ -350,9 +348,9 @@ pub fn get_network_config(ssid: &str) -> Option<NetworkConfig> {
     
     let mut is_eth = false;
     for line in stdout.lines() {
-        let parts: Vec<&str> = line.split(':').collect();
+        let parts = parse_nmcli_line(line);
         if parts.len() < 2 { continue; }
-        match parts[0] {
+        match parts[0].as_str() {
             "connection.type" => is_eth = parts[1].contains("ethernet"),
             "connection.autoconnect" => config.autoconnect = parts[1] == "yes",
             "connection.autoconnect-priority" => config.priority = parts[1].parse().unwrap_or(0),

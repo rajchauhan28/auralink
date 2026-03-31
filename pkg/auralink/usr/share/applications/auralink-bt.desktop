@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=AuraLink Bluetooth
+Comment=Manage Bluetooth devices with style
+Exec=auralink-bt
+Icon=bluetooth
+Terminal=false
+Type=Application
+Categories=Settings;HardwareSettings;
+StartupNotify=true
+StartupWMClass=auralink-bt
