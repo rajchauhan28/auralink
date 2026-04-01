@@ -14,6 +14,7 @@ export struct BluetoothDevice {
     paired: bool,
     trusted: bool,
     rssi: int,
+    battery: int,
     icon: string,
     icon_color: color,
     audio_profiles: [AudioProfile],
@@ -450,6 +451,13 @@ export component AppWindow inherits Window {
                                                 text: "󰒄";
                                                 font-size: 12px;
                                                 color: Palette.accent;
+                                                vertical-alignment: center;
+                                            }
+                                            if (dev.battery > 0) : Text {
+                                                text: "󰁹 " + dev.battery + "%";
+                                                font-size: 10px;
+                                                font-weight: 900;
+                                                color: dev.battery < 20 ? #ff0055 : (dev.battery < 50 ? #f5c211 : #00ffaa);
                                                 vertical-alignment: center;
                                             }
                                         }

@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::time::{Duration, Instant};
 use std::collections::VecDeque;
 use rfd::FileDialog;
+use serde_json::json;
 
 mod ui {
     include!(concat!(env!("OUT_DIR"), "/wifi.rs"));
@@ -106,6 +107,79 @@ fn apply_pywal_theme(handle: slint::Weak<WifiWindow>) {
 
 #[tokio::main]
 async fn main() -> Result<(), slint::PlatformError> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        let cmd = args[1].as_str();
+        match cmd {
+            "status" => {
+                let networks = nm_backend::list_networks();
+                let vpns = nm_backend::list_vpns();
+                let active_network = networks.iter().find(|n| n.connected).cloned();
+                let active_vpns: Vec<_> = vpns.into_iter().filter(|v| v.active).collect();
+                let active_iface = nm_backend::get_active_interface();
+                let stats = active_iface.as_ref()
+                    .and_then(|iface| nm_backend::get_interface_stats(iface))
+                    .unwrap_or((0, 0));
+
+                let status = json!({
+                    "active_network": active_network,
+                    "active_vpns": active_vpns,
+                    "interface_stats": {
+                        "rx": stats.0,
+                        "tx": stats.1,
+                    },
+                    "is_scanning": false,
+                });
+                println!("{}", status);
+                return Ok(());
+            }
+            "fullstatus" => {
+                let networks = nm_backend::list_networks();
+                let vpns = nm_backend::list_vpns();
+                let active_network = networks.iter().find(|n| n.connected).cloned();
+                let active_vpns: Vec<_> = vpns.into_iter().filter(|v| v.active).collect();
+                let active_iface = nm_backend::get_active_interface();
+                let stats = active_iface.as_ref()
+                    .and_then(|iface| nm_backend::get_interface_stats(iface))
+                    .unwrap_or((0, 0));
+
+                let status_obj = json!({
+                    "active_network": active_network,
+                    "active_vpns": active_vpns,
+                    "interface_stats": {
+                        "rx": stats.0,
+                        "tx": stats.1,
+                    },
+                    "is_scanning": false,
+                });
+
+                let full_status = json!({
+                    "status": status_obj,
+                    "available_networks": networks,
+                });
+                println!("{}", full_status);
+                return Ok(());
+            }
+            "--help" | "-h" | "help" => {
+                println!("Usage: auralink [COMMAND]\n");
+                println!("Commands:");
+                println!("  status      Get current connection status (JSON)");
+                println!("  fullstatus  Get detailed status including available networks (JSON)");
+                println!("  --help      Show this help message");
+                return Ok(());
+            }
+            _ => {
+                eprintln!("Error: Unknown command '{}'", cmd);
+                println!("Usage: auralink [COMMAND]\n");
+                println!("Commands:");
+                println!("  status      Get current connection status (JSON)");
+                println!("  fullstatus  Get detailed status including available networks (JSON)");
+                println!("  --help      Show this help message");
+                std::process::exit(1);
+            }
+        }
+    }
+
     let main_window = WifiWindow::new()?;
     let config = Arc::new(Mutex::new(AppConfig::load()));
     let force_refresh = Arc::new(AtomicBool::new(false));

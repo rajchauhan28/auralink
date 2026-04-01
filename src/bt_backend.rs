@@ -17,6 +17,7 @@ pub struct BluetoothDevice {
     pub paired: bool,
     pub trusted: bool,
     pub rssi: i32,
+    pub battery: Option<i32>,
     pub audio_profiles: Vec<AudioProfile>,
 }
 
@@ -49,6 +50,7 @@ pub fn list_devices() -> Vec<BluetoothDevice> {
                     paired: false,
                     trusted: false,
                     rssi: 0,
+                    battery: None,
                     audio_profiles: Vec::new(),
                 });
             }
@@ -80,6 +82,7 @@ pub fn get_device_info(address: &str) -> Option<BluetoothDevice> {
         paired: false,
         trusted: false,
         rssi: 0,
+        battery: None,
         audio_profiles: Vec::new(),
     };
 
@@ -95,6 +98,18 @@ pub fn get_device_info(address: &str) -> Option<BluetoothDevice> {
             dev.trusted = line[8..].trim() == "yes";
         } else if line.starts_with("RSSI:") {
             dev.rssi = line[5..].trim().parse().unwrap_or(0);
+        } else if line.contains("Battery Percentage:") {
+            if let Some(start) = line.find('(') {
+                if let Some(end) = line.find(')') {
+                    dev.battery = line[start+1..end].parse().ok();
+                }
+            } else {
+                // Try parsing direct number if no parens
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if let Some(last) = parts.last() {
+                    dev.battery = last.trim_matches('%').parse().ok();
+                }
+            }
         }
     }
 
@@ -242,6 +257,43 @@ pub fn set_power(enable: bool) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+pub fn start_scan() -> bool {
+    Command::new("bluetoothctl")
+        .args(&["scan", "on"])
+        .spawn()
+        .is_ok()
+}
+
+pub fn stop_scan() -> bool {
+    Command::new("bluetoothctl")
+        .args(&["scan", "off"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+pub fn list_connected_devices() -> Vec<BluetoothDevice> {
+    let output = Command::new("bluetoothctl")
+        .args(&["devices", "Connected"])
+        .output()
+        .ok();
+        
+    let mut devices = Vec::new();
+    if let Some(o) = output {
+        let stdout = String::from_utf8_lossy(&o.stdout);
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 && parts[0] == "Device" {
+                let address = parts[1];
+                if let Some(info) = get_device_info(address) {
+                    devices.push(info);
+                }
+            }
+        }
+    }
+    devices
 }
 
 pub fn is_powered() -> bool {

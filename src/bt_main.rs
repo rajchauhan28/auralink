@@ -96,11 +96,72 @@ struct InternalBluetoothDevice {
     paired: bool,
     trusted: bool,
     rssi: i32,
+    battery: Option<i32>,
     audio_profiles: Vec<bt_backend::AudioProfile>,
 }
 
-fn main() -> Result<(), slint::PlatformError> {
-    let main_window = AppWindow::new()?;
+fn handle_commands(args: &[String]) -> Option<Result<(), Box<dyn std::error::Error>>> {
+    if args.len() <= 1 {
+        return None;
+    }
+
+    match args[1].as_str() {
+        "status" => {
+            let powered = bt_backend::is_powered();
+            let connected_devices = bt_backend::list_connected_devices();
+            println!("{}", serde_json::json!({
+                "powered": powered,
+                "connected_devices": connected_devices
+            }));
+            Some(Ok(()))
+        }
+        "fullstatus" => {
+            let powered = bt_backend::is_powered();
+            let connected_devices = bt_backend::list_connected_devices();
+            let all_devices = bt_backend::list_devices();
+            println!("{}", serde_json::json!({
+                "status": {
+                    "powered": powered,
+                    "connected_devices": connected_devices
+                },
+                "all_devices": all_devices
+            }));
+            Some(Ok(()))
+        }
+        "--help" | "-h" | "help" => {
+            println!("Usage: auralink-bt [COMMAND]");
+            println!("");
+            println!("Commands:");
+            println!("  status      Get current connection status (JSON)");
+            println!("  fullstatus  Get detailed status including available devices (JSON)");
+            println!("  --help      Show this help message");
+            Some(Ok(()))
+        }
+        "toggle" => {
+            let powered = bt_backend::is_powered();
+            bt_backend::set_power(!powered);
+            Some(Ok(()))
+        }
+        cmd => {
+            eprintln!("Error: Unknown command '{}'", cmd);
+            println!("Usage: auralink-bt [COMMAND]");
+            println!("");
+            println!("Commands:");
+            println!("  status      Get current connection status (JSON)");
+            println!("  fullstatus  Get detailed status including available devices (JSON)");
+            println!("  --help      Show this help message");
+            Some(Ok(()))
+        }
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(res) = handle_commands(&args) {
+        return res;
+    }
+
+    let main_window = AppWindow::new().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
     let config = Arc::new(Mutex::new(AppConfig::load()));
     
     if let Ok(cfg) = config.lock() {
@@ -244,7 +305,26 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
-    main_window.on_refresh(|| { });
+    let window_weak = main_window.as_weak();
+    main_window.on_refresh(move || {
+        if let Some(ui) = window_weak.upgrade() {
+            ui.set_is_scanning(true);
+            ui.set_status_msg("SCANNING...".into());
+            
+            let handle = window_weak.clone();
+            std::thread::spawn(move || {
+                let _ = bt_backend::start_scan();
+                std::thread::sleep(Duration::from_secs(10));
+                let _ = bt_backend::stop_scan();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = handle.upgrade() {
+                        ui.set_is_scanning(false);
+                        ui.set_status_msg("READY".into());
+                    }
+                });
+            });
+        }
+    });
 
     let window_weak = main_window.as_weak();
     std::thread::spawn(move || {
@@ -258,6 +338,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     paired: d.paired,
                     trusted: d.trusted,
                     rssi: d.rssi,
+                    battery: d.battery,
                     audio_profiles: d.audio_profiles,
                 }
             }).collect();
@@ -287,6 +368,7 @@ fn main() -> Result<(), slint::PlatformError> {
                             paired: d.paired,
                             trusted: d.trusted,
                             rssi: d.rssi,
+                            battery: d.battery.unwrap_or(0),
                             icon: icon.into(),
                             icon_color,
                             audio_profiles: ModelRc::new(VecModel::from(slint_profiles)),
@@ -302,5 +384,40 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
-    main_window.run()
+    main_window.run().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_handle_commands_none() {
+        let args = vec!["auralink-bt".to_string()];
+        assert!(handle_commands(&args).is_none());
+    }
+
+    #[test]
+    fn test_handle_commands_help() {
+        let args = vec!["auralink-bt".to_string(), "--help".to_string()];
+        assert!(handle_commands(&args).is_some());
+    }
+
+    #[test]
+    fn test_handle_commands_status() {
+        let args = vec!["auralink-bt".to_string(), "status".to_string()];
+        assert!(handle_commands(&args).is_some());
+    }
+
+    #[test]
+    fn test_handle_commands_fullstatus() {
+        let args = vec!["auralink-bt".to_string(), "fullstatus".to_string()];
+        assert!(handle_commands(&args).is_some());
+    }
+
+    #[test]
+    fn test_handle_commands_unknown() {
+        let args = vec!["auralink-bt".to_string(), "unknown".to_string()];
+        assert!(handle_commands(&args).is_some());
+    }
 }
