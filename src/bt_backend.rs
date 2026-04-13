@@ -260,13 +260,28 @@ pub fn set_power(enable: bool) -> bool {
 }
 
 pub fn start_scan() -> bool {
+    // Ensure power is on before scanning
+    let _ = Command::new("bluetoothctl")
+        .args(&["power", "on"])
+        .output();
+
+    // Using --timeout ensures the bluetoothctl process stays alive long enough
+    // for BlueZ to maintain the discovery session. We use a generous timeout
+    // but stop_scan will kill it early.
     Command::new("bluetoothctl")
-        .args(&["scan", "on"])
+        .args(&["--timeout", "60", "scan", "on"])
         .spawn()
         .is_ok()
 }
 
 pub fn stop_scan() -> bool {
+    // Kill any existing bluetoothctl scan processes started by start_scan
+    // This is necessary because bluetoothctl scan on must be kept open to maintain discovery.
+    let _ = Command::new("pkill")
+        .args(&["-f", "bluetoothctl.*scan on"])
+        .output();
+    
+    // Also try the official way
     Command::new("bluetoothctl")
         .args(&["scan", "off"])
         .output()

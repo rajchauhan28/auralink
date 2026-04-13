@@ -314,7 +314,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let handle = window_weak.clone();
             std::thread::spawn(move || {
                 let _ = bt_backend::start_scan();
-                std::thread::sleep(Duration::from_secs(10));
+                std::thread::sleep(Duration::from_secs(15));
                 let _ = bt_backend::stop_scan();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = handle.upgrade() {
@@ -324,6 +324,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
             });
         }
+    });
+
+    // Initial scan on startup
+    let window_weak = main_window.as_weak();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = window_weak.upgrade() {
+                ui.invoke_refresh();
+            }
+        });
     });
 
     let window_weak = main_window.as_weak();
