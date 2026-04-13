@@ -3,8 +3,8 @@
 **AuraLink** is a modern, lightweight, and aesthetically pleasing Wi-Fi and VPN manager for Linux. Built with **Rust** and **Slint**, it offers a seamless user experience with live theme synchronization.
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/e5f516bd-44ab-41da-870e-7ef51ad5a59b" width="300" />
-  <img src="https://github.com/user-attachments/assets/de0158ba-13ee-4f9b-9e16-315d2bd7292b" width="300" />
+  <img width="855" height="649" alt="screenshot_20260413_221455" src="https://github.com/user-attachments/assets/43ba681e-ee20-4cd7-ac86-2d001155d08e" />
+  <img width="834" height="631" alt="image" src="https://github.com/user-attachments/assets/9dd10dac-4905-4927-8c29-a79082f2f9dd" />
 </p>
 
 ## ✨ Features
