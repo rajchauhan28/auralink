@@ -54,6 +54,7 @@ You can use the provided build script to generate all package formats (AppImage,
 ```
 The output files will be located in the `output/` directory.
 ## File structure
+```
 ├── .gitignore
 ├── AppDir/ (Standalone LinuxApp directory with binaries, libs, icons, and desktop files)
 ├── assets/
@@ -77,5 +78,6 @@ The output files will be located in the `output/` directory.
 └── ui/
     ├── bluetooth.slint
     └── wifi.slint
+```
 ## 📝 License
 MIT License - Copyright (c) 2026 rajchauhan28
