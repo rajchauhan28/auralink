@@ -74,8 +74,8 @@ fn apply_pywal_theme(handle: slint::Weak<WifiWindow>) {
     let home = std::env::var("HOME").unwrap_or_default();
     let path = format!("{}/.cache/wal/colors.json", home);
     
-    if let Ok(content) = std::fs::read_to_string(path) {
-        if let Ok(wal) = serde_json::from_str::<PywalColors>(&content) {
+    if let Ok(content) = std::fs::read_to_string(path)
+        && let Ok(wal) = serde_json::from_str::<PywalColors>(&content) {
             let mut bg = parse_hex(wal.special.get("background").unwrap_or(&"#09090b".to_string())).unwrap_or(Color::from_rgb_u8(9, 9, 11));
             // Add 50% opacity for glassmorphism to the pywal background
             bg = Color::from_argb_u8(136, bg.red(), bg.green(), bg.blue());
@@ -102,7 +102,6 @@ fn apply_pywal_theme(handle: slint::Weak<WifiWindow>) {
                 }
             });
         }
-    }
 }
 
 #[tokio::main]
@@ -233,8 +232,17 @@ async fn main() -> Result<(), slint::PlatformError> {
         let _ = std::process::Command::new("nmtui").spawn();
     });
 
+    let window_weak = main_window.as_weak();
     main_window.on_disconnect(move || {
-        nm_backend::disconnect_wifi();
+        let success = nm_backend::disconnect_wifi();
+        let ww = window_weak.clone();
+        std::thread::spawn(move || {
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ww.upgrade() {
+                    ui.set_status_msg(if success { "Disconnected".into() } else { "Disconnect failed".into() });
+                }
+            });
+        });
     });
 
     let window_weak = main_window.as_weak();
@@ -321,19 +329,20 @@ async fn main() -> Result<(), slint::PlatformError> {
     });
 
     let window_weak = main_window.as_weak();
-    main_window.on_connect(move |ssid, _pass| {
+    main_window.on_connect(move |ssid, pass| {
         let ssid = ssid.to_string();
+        let password = if !pass.is_empty() { Some(pass.to_string()) } else { None };
         if let Some(ui) = window_weak.upgrade() {
             ui.set_is_connecting(true);
             ui.set_status_msg(format!("Connecting to {}...", ssid).into());
             
             let ww = window_weak.clone();
             std::thread::spawn(move || {
-                let success = nm_backend::connect_to_wifi(&ssid, None);
+                let success = nm_backend::connect_to_wifi(&ssid, password.as_deref());
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = ww.upgrade() {
                         ui.set_is_connecting(false);
-                        ui.set_status_msg(if success { format!("Connected to {}", ssid) } else { "Failed!".to_string() }.into());
+                        ui.set_status_msg(if success { format!("Connected to {}", ssid).into() } else { "Failed!".into() });
                     }
                 });
             });
@@ -379,7 +388,15 @@ async fn main() -> Result<(), slint::PlatformError> {
     let window_weak = main_window.as_weak();
     let fr_clone = force_refresh.clone();
     std::thread::spawn(move || {
+        let mut needs_rescan = false;
+
         loop {
+            if needs_rescan {
+                nm_backend::trigger_rescan();
+                std::thread::sleep(Duration::from_secs(3));
+                needs_rescan = false;
+            }
+
             let mut networks = nm_backend::list_networks();
             for net in &mut networks {
                 if net.connected {
@@ -425,7 +442,7 @@ async fn main() -> Result<(), slint::PlatformError> {
             });
 
             if fr_clone.swap(false, Ordering::SeqCst) {
-                nm_backend::trigger_rescan();
+                needs_rescan = true;
             }
 
             for _ in 0..100 {
@@ -450,8 +467,8 @@ async fn main() -> Result<(), slint::PlatformError> {
                 last_iface_check = Instant::now();
             }
 
-            if let Some(ref iface) = active_iface {
-                if let Some((rx, tx)) = nm_backend::get_interface_stats(iface) {
+            if let Some(ref iface) = active_iface
+                && let Some((rx, tx)) = nm_backend::get_interface_stats(iface) {
                     let now = Instant::now();
                     if let Some((l_rx, l_tx, l_time)) = last_stats {
                         let duration = now.duration_since(l_time).as_secs_f64();
@@ -489,7 +506,6 @@ async fn main() -> Result<(), slint::PlatformError> {
                         last_stats = Some((rx, tx, now));
                     }
                 }
-            }
             std::thread::sleep(Duration::from_millis(200));
         }
     });
@@ -508,16 +524,13 @@ async fn main() -> Result<(), slint::PlatformError> {
                 enabled = cfg.pywal_enabled;
             }
 
-            if enabled {
-                if let Ok(metadata) = std::fs::metadata(&path) {
-                    if let Ok(mtime) = metadata.modified() {
-                        if Some(mtime) != last_mod {
+            if enabled
+                && let Ok(metadata) = std::fs::metadata(&path)
+                    && let Ok(mtime) = metadata.modified()
+                        && Some(mtime) != last_mod {
                             last_mod = Some(mtime);
                             apply_pywal_theme(window_weak.clone());
                         }
-                    }
-                }
-            }
             std::thread::sleep(Duration::from_secs(2));
         }
     });

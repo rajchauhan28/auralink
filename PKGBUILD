@@ -2,7 +2,7 @@
 pkgname=auralink
 pkgver=0.1.5
 pkgrel=1
-pkgdesc="A modern, lightweight, and aesthetic Wi-Fi and VPN manager for Linux."
+pkgdesc="A blazing-fast, aesthetic Wi-Fi, VPN, and Bluetooth manager for Linux. Built with Rust and Slint, featuring live Pywal sync."
 arch=('x86_64')
 url="https://github.com/rajchauhan28/auralink"
 license=('MIT')

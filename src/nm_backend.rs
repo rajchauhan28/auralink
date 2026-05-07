@@ -41,7 +41,7 @@ pub fn list_networks() -> Vec<Network> {
     let active_ssid = get_active_ssid();
 
     let output = Command::new("nmcli")
-        .args(&["-t", "-f", "SSID,BSSID,SIGNAL,SECURITY,IN-USE", "dev", "wifi", "list"])
+        .args(["-t", "-f", "SSID,BSSID,SIGNAL,SECURITY,IN-USE", "dev", "wifi", "list"])
         .output()
         .expect("failed to execute nmcli");
 
@@ -51,7 +51,7 @@ pub fn list_networks() -> Vec<Network> {
 
     // Add Ethernet connections first
     if let Ok(eth_output) = Command::new("nmcli")
-        .args(&["-t", "-f", "NAME,TYPE,STATE,DEVICE", "con", "show", "--active"])
+        .args(["-t", "-f", "NAME,TYPE,STATE,DEVICE", "con", "show", "--active"])
         .output() {
         let eth_stdout = String::from_utf8_lossy(&eth_output.stdout);
         for line in eth_stdout.lines() {
@@ -107,7 +107,7 @@ pub fn list_networks() -> Vec<Network> {
 
 fn get_active_ssid() -> Option<String> {
     let output = Command::new("nmcli")
-        .args(&["-t", "-f", "ACTIVE,SSID", "dev", "wifi"])
+        .args(["-t", "-f", "ACTIVE,SSID", "dev", "wifi"])
         .output()
         .ok()?;
     
@@ -122,7 +122,7 @@ fn get_active_ssid() -> Option<String> {
 
 fn get_saved_ssids() -> HashSet<String> {
     let output = Command::new("nmcli")
-        .args(&["-t", "-f", "NAME,TYPE", "connection", "show"])
+        .args(["-t", "-f", "NAME,TYPE", "connection", "show"])
         .output()
         .ok();
 
@@ -140,7 +140,7 @@ fn get_saved_ssids() -> HashSet<String> {
 }
 
 pub fn trigger_rescan() {
-    let _ = Command::new("nmcli").args(&["dev", "wifi", "rescan"]).spawn();
+    let _ = Command::new("nmcli").args(["dev", "wifi", "rescan"]).spawn();
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,14 +153,14 @@ pub struct VpnConnection {
 pub fn list_vpns() -> Vec<VpnConnection> {
     let mut vpns = Vec::new();
 
-    if let Ok(output) = Command::new("nmcli").args(&["-t", "-f", "NAME,TYPE,STATE", "c", "show"]).output() {
+    if let Ok(output) = Command::new("nmcli").args(["-t", "-f", "NAME,TYPE,STATE", "c", "show"]).output() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         for line in stdout.lines() {
-            let parts: Vec<&str> = line.split(':').collect();
+            let parts = parse_nmcli_line(line);
             if parts.len() >= 3 {
-                let name = parts[0];
-                let ctype = parts[1];
-                let state = parts[2];
+                let name = &parts[0];
+                let ctype = &parts[1];
+                let state = &parts[2];
                 if ctype == "wireguard" || ctype == "vpn" || ctype == "openvpn" {
                     vpns.push(VpnConnection {
                         name: name.to_string(),
@@ -172,12 +172,12 @@ pub fn list_vpns() -> Vec<VpnConnection> {
         }
     }
 
-    let warp_active = Command::new("systemctl").args(&["is-active", "warp-svc"]).output()
+    let warp_active = Command::new("systemctl").args(["is-active", "warp-svc"]).output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "active")
         .unwrap_or(false);
 
-    if warp_active {
-        if let Ok(output) = Command::new("warp-cli").arg("status").output() {
+    if warp_active
+        && let Ok(output) = Command::new("warp-cli").arg("status").output() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             vpns.push(VpnConnection {
                 name: "Cloudflare WARP".to_string(),
@@ -185,25 +185,21 @@ pub fn list_vpns() -> Vec<VpnConnection> {
                 active: stdout.contains("Status update: Connected") || stdout.contains("Connected"),
             });
         }
-    }
 
-    if let Ok(output) = Command::new("ip").args(&["link", "show", "hiddify-tun"]).output() {
+    if let Ok(output) = Command::new("ip").args(["link", "show", "hiddify-tun"]).output() {
         if output.status.success() {
              vpns.push(VpnConnection {
                 name: "Hiddify".to_string(),
                 vpn_type: "hiddify".to_string(),
                 active: true,
             });
-        } else {
-             if let Ok(output) = Command::new("pgrep").arg("-x").arg("hiddify").output() {
-                 if output.status.success() {
-                     vpns.push(VpnConnection {
-                        name: "Hiddify".to_string(),
-                        vpn_type: "hiddify".to_string(),
-                        active: true,
-                    });
-                 }
-             }
+        } else if let Ok(output) = Command::new("pgrep").arg("-x").arg("hiddify").output()
+        && output.status.success() {
+            vpns.push(VpnConnection {
+               name: "Hiddify".to_string(),
+               vpn_type: "hiddify".to_string(),
+               active: true,
+           });
         }
     }
 
@@ -215,10 +211,13 @@ pub fn toggle_vpn(name: &str, vpn_type: &str, enable: bool) -> bool {
         let arg = if enable { "connect" } else { "disconnect" };
         Command::new("warp-cli").arg(arg).output().map(|o| o.status.success()).unwrap_or(false)
     } else if vpn_type == "hiddify" {
-        false
+        let cmd = if enable { "start" } else { "stop" };
+        Command::new("systemctl").args([cmd, "hiddify-agent"]).output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     } else {
         let arg = if enable { "up" } else { "down" };
-        Command::new("nmcli").args(&["c", arg, name]).output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new("nmcli").args(["c", arg, name]).output().map(|o| o.status.success()).unwrap_or(false)
     }
 }
 
@@ -232,7 +231,7 @@ pub fn import_vpn(file_path: &str) -> bool {
     };
     
     Command::new("nmcli")
-        .args(&["connection", "import", "type", vpn_type, "file", file_path])
+        .args(["connection", "import", "type", vpn_type, "file", file_path])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -240,10 +239,10 @@ pub fn import_vpn(file_path: &str) -> bool {
 
 pub fn forget_network(ssid: &str) -> bool {
     let _ = Command::new("nmcli")
-        .args(&["connection", "down", "id", ssid])
+        .args(["connection", "down", "id", ssid])
         .output();
     Command::new("nmcli")
-        .args(&["connection", "delete", "id", ssid])
+        .args(["connection", "delete", "id", ssid])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -251,29 +250,27 @@ pub fn forget_network(ssid: &str) -> bool {
 
 pub fn get_network_info(ssid: &str) -> String {
     let output = Command::new("nmcli")
-        .args(&["connection", "show", ssid])
+        .args(["connection", "show", ssid])
         .output()
         .ok();
         
-    if let Some(o) = output {
-        if o.status.success() {
+    if let Some(o) = output
+        && o.status.success() {
             let full_info = String::from_utf8_lossy(&o.stdout).to_string();
             let mut result = Vec::new();
             
             for line in full_info.lines() {
-                if line.contains("GENERAL.") || 
+                if (line.contains("GENERAL.") || 
                    line.contains("IP4.") || 
                    line.contains("IP6.") || 
                    line.contains("DHCP4.") ||
-                   line.contains("802-11-wireless") 
-                {
-                    if let Some(sep_idx) = line.find(':') {
+                   line.contains("802-11-wireless"))
+                    && let Some(sep_idx) = line.find(':') {
                         let key = line[..sep_idx].trim();
                         let value = line[sep_idx+1..].trim();
                         
                         // Make key more readable: "IP4.ADDRESS[1]" -> "IP4 ADDRESS"
-                        let clean_key = key.replace('.', " ")
-                                           .replace('[', " ")
+                        let clean_key = key.replace(['.', '['], " ")
                                            .replace(']', "")
                                            .replace('-', " ");
                         
@@ -281,13 +278,11 @@ pub fn get_network_info(ssid: &str) -> String {
                             result.push(format!("{}: {}", clean_key.to_uppercase(), value));
                         }
                     }
-                }
             }
             
             if result.is_empty() { return "No active connection details.".to_string(); }
             return result.join("\n");
         }
-    }
     
     format!("SSID: {}\nNo detailed connection info available.", ssid)
 }
@@ -325,7 +320,7 @@ pub fn get_network_config(ssid: &str) -> Option<NetworkConfig> {
     ];
 
     let output = Command::new("nmcli")
-        .args(&["-s", "-t", "-f", &fields.join(","), "connection", "show", ssid])
+        .args(["-s", "-t", "-f", &fields.join(","), "connection", "show", ssid])
         .output()
         .ok()?;
         
@@ -345,13 +340,22 @@ pub fn get_network_config(ssid: &str) -> Option<NetworkConfig> {
         mac_address: String::new(),
         password: String::new(),
     };
-    
+
+    // First pass: determine connection type from the nmcli output
     let mut is_eth = false;
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split(':').collect();
+        if parts.len() >= 2 && parts[0] == "connection.type" {
+            is_eth = parts[1].contains("ethernet");
+            break;
+        }
+    }
+
+    // Second pass: populate config fields
     for line in stdout.lines() {
         let parts = parse_nmcli_line(line);
         if parts.len() < 2 { continue; }
         match parts[0].as_str() {
-            "connection.type" => is_eth = parts[1].contains("ethernet"),
             "connection.autoconnect" => config.autoconnect = parts[1] == "yes",
             "connection.autoconnect-priority" => config.priority = parts[1].parse().unwrap_or(0),
             "ipv4.dns" => config.dns = parts[1].to_string(),
@@ -410,7 +414,7 @@ pub fn update_network_config(ssid: &str, config: NetworkConfig) -> bool {
 
     // Determine connection type for MAC address field
     let is_eth = Command::new("nmcli")
-        .args(&["-t", "-f", "connection.type", "connection", "show", ssid])
+        .args(["-t", "-f", "connection.type", "connection", "show", ssid])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).contains("ethernet"))
         .unwrap_or(false);
@@ -435,24 +439,23 @@ pub fn update_network_config(ssid: &str, config: NetworkConfig) -> bool {
 
 pub fn get_ping(host: &str) -> Option<u64> {
     let output = Command::new("ping")
-        .args(&["-c", "1", "-W", "1", host])
+        .args(["-c", "1", "-W", "1", host])
         .output()
         .ok()?;
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        if let Some(time_part) = stdout.split("time=").nth(1) {
-            if let Some(ms_str) = time_part.split_whitespace().next() {
+        if let Some(time_part) = stdout.split("time=").nth(1)
+            && let Some(ms_str) = time_part.split_whitespace().next() {
                 return ms_str.parse::<f64>().ok().map(|f| f as u64);
             }
-        }
     }
     None
 }
 
 pub fn get_active_interface() -> Option<String> {
     let output = Command::new("nmcli")
-        .args(&["-t", "-f", "DEVICE,TYPE,STATE", "dev"])
+        .args(["-t", "-f", "DEVICE,TYPE,STATE", "dev"])
         .output()
         .ok()?;
 
@@ -491,28 +494,27 @@ pub fn get_interface_stats(iface: &str) -> Option<(u64, u64)> {
 pub fn connect_to_wifi(ssid: &str, password: Option<&str>) -> bool {
     if let Some(pass) = password {
         let mut cmd = Command::new("nmcli");
-        cmd.args(&["--wait", "15", "dev", "wifi", "connect", ssid, "password", pass]);
+        cmd.args(["--wait", "15", "dev", "wifi", "connect", ssid, "password", pass]);
         cmd.output().map(|o| o.status.success()).unwrap_or(false)
     } else {
         let mut cmd = Command::new("nmcli");
-        cmd.args(&["--wait", "15", "connection", "up", "id", ssid]);
+        cmd.args(["--wait", "15", "connection", "up", "id", ssid]);
         let output = cmd.output();
         
-        if let Ok(o) = output {
-            if o.status.success() {
+        if let Ok(o) = output
+            && o.status.success() {
                 return true;
             }
-        }
         
         let mut cmd2 = Command::new("nmcli");
-        cmd2.args(&["--wait", "15", "dev", "wifi", "connect", ssid]);
+        cmd2.args(["--wait", "15", "dev", "wifi", "connect", ssid]);
         cmd2.output().map(|o| o.status.success()).unwrap_or(false)
     }
 }
 
 pub fn disconnect_wifi() -> bool {
     let output = Command::new("nmcli")
-        .args(&["-t", "-f", "DEVICE,TYPE,STATE", "dev"])
+        .args(["-t", "-f", "DEVICE,TYPE,STATE", "dev"])
         .output()
         .ok();
 
@@ -522,7 +524,7 @@ pub fn disconnect_wifi() -> bool {
             let parts: Vec<&str> = line.split(':').collect();
             if parts.len() >= 3 && parts[1] == "wifi" && parts[2] == "connected" {
                 let dev = parts[0];
-                let _ = Command::new("nmcli").args(&["dev", "disconnect", dev]).output();
+                let _ = Command::new("nmcli").args(["dev", "disconnect", dev]).output();
                 return true;
             }
         }

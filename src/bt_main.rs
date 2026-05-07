@@ -1,6 +1,7 @@
 mod bt_backend;
 
 use slint::{VecModel, Color, ModelRc, ComponentHandle};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -50,6 +51,12 @@ fn parse_hex(hex: &str) -> Option<Color> {
         let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
         let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
         Some(Color::from_rgb_u8(r, g, b))
+    } else if hex.len() == 8 {
+        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+        let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
+        Some(Color::from_argb_u8(a, r, g, b))
     } else {
         None
     }
@@ -59,8 +66,8 @@ fn apply_pywal_theme(handle: slint::Weak<AppWindow>) {
     let home = std::env::var("HOME").unwrap_or_default();
     let path = format!("{}/.cache/wal/colors.json", home);
     
-    if let Ok(content) = std::fs::read_to_string(path) {
-        if let Ok(wal) = serde_json::from_str::<PywalColors>(&content) {
+    if let Ok(content) = std::fs::read_to_string(path)
+        && let Ok(wal) = serde_json::from_str::<PywalColors>(&content) {
             let mut bg = parse_hex(wal.special.get("background").unwrap_or(&"#09090b".to_string())).unwrap_or(Color::from_rgb_u8(9, 9, 11));
             bg = Color::from_argb_u8(136, bg.red(), bg.green(), bg.blue());
             
@@ -85,7 +92,6 @@ fn apply_pywal_theme(handle: slint::Weak<AppWindow>) {
                 }
             });
         }
-    }
 }
 
 // Intermediate struct that IS Send
@@ -130,7 +136,7 @@ fn handle_commands(args: &[String]) -> Option<Result<(), Box<dyn std::error::Err
         }
         "--help" | "-h" | "help" => {
             println!("Usage: auralink-bt [COMMAND]");
-            println!("");
+            println!();
             println!("Commands:");
             println!("  status      Get current connection status (JSON)");
             println!("  fullstatus  Get detailed status including available devices (JSON)");
@@ -145,7 +151,7 @@ fn handle_commands(args: &[String]) -> Option<Result<(), Box<dyn std::error::Err
         cmd => {
             eprintln!("Error: Unknown command '{}'", cmd);
             println!("Usage: auralink-bt [COMMAND]");
-            println!("");
+            println!();
             println!("Commands:");
             println!("  status      Get current connection status (JSON)");
             println!("  fullstatus  Get detailed status including available devices (JSON)");
@@ -247,6 +253,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ui.set_status_msg(format!("Trust failed for {}", address).into());
                     }
                 });
+            } else {
+                eprintln!("Trust successful for {}, triggering scan refresh...", address);
+                std::thread::sleep(Duration::from_millis(500));
+                let _ = bt_backend::start_scan();
+                let addr = address.clone();
+                let t = trust;
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = ww.upgrade() {
+                        ui.set_status_msg(format!("{}ed {}", if t { "Trust" } else { "Untrust" }, addr).into());
+                    }
+                });
             }
         });
     });
@@ -256,14 +273,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let address = address.to_string();
         let ww = window_weak.clone();
         std::thread::spawn(move || {
-            let success = if pair { bt_backend::pair(&address) } else { true };
-            if !success {
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = ww.upgrade() {
-                        ui.set_status_msg(format!("Pair failed for {}", address).into());
-                    }
-                });
-            }
+            let success = if pair {
+                bt_backend::pair(&address)
+            } else {
+                bt_backend::remove(&address)
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ww.upgrade() {
+                    ui.set_status_msg(if success {
+                        if pair { format!("Paired {}", address).into() } else { format!("Removed {}", address).into() }
+                    } else {
+                        format!("Failed to {} for {}", if pair { "pair" } else { "unpair" }, address).into()
+                    });
+                }
+            });
         });
     });
 
@@ -335,6 +358,89 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.invoke_refresh();
             }
         });
+    });
+
+    let window_weak = main_window.as_weak();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(3));
+
+        eprintln!("=== Auto-connect starting ===");
+        let _ = bt_backend::ensure_switch_on_connect_module();
+
+        let trusted: Vec<String> = bt_backend::list_trusted();
+        eprintln!("Trusted devices: {:?}", trusted);
+        if trusted.is_empty() {
+            eprintln!("No trusted devices found. Trust devices from the UI first.");
+            return;
+        }
+        for address in trusted {
+            if let Some(current) = bt_backend::get_connected_address()
+                && current == address {
+                    continue;
+                }
+
+            std::thread::sleep(Duration::from_millis(1000));
+
+            eprintln!("Attempting to connect {}...", address);
+            let success = bt_backend::connect_trusted_device(&address);
+            let addr_clone = address.clone();
+            let ww = window_weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ww.upgrade() {
+                    ui.set_status_msg(if success {
+                        format!("Auto-connected {}", addr_clone).into()
+                    } else {
+                        format!("Failed to auto-connect {}", addr_clone).into()
+                    });
+                }
+            });
+
+            if success {
+                std::thread::sleep(Duration::from_secs(2));
+                let _ = bt_backend::force_a2dp_profile(&address);
+            }
+        }
+    });
+
+    let window_weak = main_window.as_weak();
+    std::thread::spawn(move || {
+        let mut known_connected: HashSet<String> = HashSet::new();
+
+        loop {
+            if let Some(connected) = bt_backend::get_connected_address() {
+                known_connected.insert(connected.clone());
+            }
+
+            let trusted: Vec<String> = bt_backend::list_trusted();
+            for address in &trusted {
+                if !known_connected.contains(address) {
+                    if let Some(current) = bt_backend::get_connected_address()
+                        && current == *address {
+                            known_connected.insert(address.clone());
+                            continue;
+                        }
+
+                    std::thread::sleep(Duration::from_millis(500));
+
+                    let success = bt_backend::connect_trusted_device(address);
+                    if success {
+                        known_connected.insert(address.clone());
+                        let addr_clone = address.clone();
+                        let ww = window_weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ww.upgrade() {
+                                ui.set_status_msg(format!("Auto-connected {}", addr_clone).into());
+                            }
+                        });
+
+                        std::thread::sleep(Duration::from_secs(2));
+                        let _ = bt_backend::force_a2dp_profile(address);
+                    }
+                }
+            }
+
+            std::thread::sleep(Duration::from_secs(8));
+        }
     });
 
     let window_weak = main_window.as_weak();

@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=AuraLink
-Comment=Manage Wi-Fi and VPN connections with style
+Comment=Modern Wi-Fi, VPN, and Network Manager built with Rust
 Exec=auralink
 Icon=auralink
 Terminal=false

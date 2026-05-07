@@ -1,8 +1,10 @@
 [package]
 name = "auralink"
 version = "0.1.5"
-description = "A modern, lightweight, and aesthetic Wi-Fi and VPN manager for Linux."
+description = "A blazing-fast, aesthetic Wi-Fi, VPN, and Bluetooth manager for Linux. Built with Rust and Slint, featuring live Pywal sync."
 edition = "2024"
+keywords = ["linux", "rust", "network-manager", "vpn", "bluetooth", "pywal", "aesthetic"]
+categories = ["network-programming", "os::linux-apis", "gui"]
 
 [[bin]]
 name = "auralink"

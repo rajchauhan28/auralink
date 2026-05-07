@@ -1,6 +1,12 @@
-# AuraLink 🌌
+# AuraLink 🌌: Modern Linux Networking Manager
 
-**AuraLink** is a modern, lightweight, and aesthetically pleasing Wi-Fi and VPN manager for Linux. Built with **Rust** and **Slint**, it offers a seamless user experience with live theme synchronization.
+**AuraLink** is a blazing-fast, aesthetic, and customizable Wi-Fi, VPN, and Bluetooth manager for Linux. Engineered with **Rust** and **Slint**, it delivers a seamless, high-performance user experience with live Pywal theme synchronization.
+
+> "Networking doesn't have to be ugly."
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Rust](https://img.shields.io/badge/Language-Rust-orange.svg)](https://www.rust-lang.org/)
+[![Slint](https://img.shields.io/badge/UI-Slint-blue.svg)](https://slint.dev/)
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/e5f516bd-44ab-41da-870e-7ef51ad5a59b" width="300" />
