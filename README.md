@@ -53,6 +53,29 @@ You can use the provided build script to generate all package formats (AppImage,
 ./build_all.sh
 ```
 The output files will be located in the `output/` directory.
-
+## File structure
+├── .gitignore
+├── AppDir/ (Standalone LinuxApp directory with binaries, libs, icons, and desktop files)
+├── assets/
+│   └── auralink.svg
+├── auralink-0.1.0.tar.gz & auralink_0.1.0_amd64.deb (Pre-built archives)
+├── auralink-bt.desktop & auralink.desktop
+├── build_all.sh & install.sh
+├── build.rs
+├── Cargo.lock & Cargo.toml
+├── docs/ (Design specs and implementation plans)
+├── linuxdeploy (AppImage bundler binary)
+├── pkg/ (Compiled Arch Linux packages with debug symbols)
+├── PKGBUILD
+├── reproduce_bt_cmds.sh
+├── src/
+│   ├── bt_backend.rs
+│   ├── bt_main.rs
+│   ├── main.rs
+│   └── nm_backend.rs
+├── test.slint & test_slint.rs
+└── ui/
+    ├── bluetooth.slint
+    └── wifi.slint
 ## 📝 License
 MIT License - Copyright (c) 2026 rajchauhan28
