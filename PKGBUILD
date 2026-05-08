@@ -7,16 +7,16 @@ arch=('x86_64')
 url="https://github.com/rajchauhan28/auralink"
 license=('MIT')
 depends=('gcc-libs' 'glibc' 'networkmanager')
-makedepends=('cargo')
-source=()
+makedepends=('cargo' 'rust')
+source=("auralink-0.1.5.tar.gz")
+sha256sums=('SKIP')
 
 build() {
-  cd "$startdir"
+  cd "$srcdir/auralink-build"
   cargo build --release
 }
 
 package() {
-  cd "$startdir"
   install -Dm755 "target/release/auralink" "${pkgdir}/usr/bin/auralink"
   install -Dm755 "target/release/auralink-bt" "${pkgdir}/usr/bin/auralink-bt"
   install -Dm644 "auralink.desktop" "${pkgdir}/usr/share/applications/auralink.desktop"

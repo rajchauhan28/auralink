@@ -3,10 +3,10 @@
 pkgname = auralink-debug
 pkgbase = auralink
 xdata = pkgtype=debug
-pkgver = 0.1.4-1
+pkgver = 0.1.5-1
 pkgdesc = Detached debugging symbols for auralink
 url = https://github.com/rajchauhan28/auralink
-builddate = 1774965406
+builddate = 1776095945
 packager = Unknown Packager
 size = 7024
 arch = x86_64
