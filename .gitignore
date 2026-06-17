@@ -7,6 +7,12 @@
 /*.AppImage
 /linuxdeploy*
 
+# Build output / packaging artifacts
+/output
+/*.tar.gz
+/*.deb
+/*.pkg.tar.zst
+
 # Editor / System
 .vscode/
 .idea/
