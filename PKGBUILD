@@ -17,6 +17,7 @@ build() {
 }
 
 package() {
+  cd "$srcdir/auralink-build"
   install -Dm755 "target/release/auralink" "${pkgdir}/usr/bin/auralink"
   install -Dm755 "target/release/auralink-bt" "${pkgdir}/usr/bin/auralink-bt"
   install -Dm644 "auralink.desktop" "${pkgdir}/usr/share/applications/auralink.desktop"
