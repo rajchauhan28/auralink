@@ -103,6 +103,7 @@ struct InternalBluetoothDevice {
     trusted: bool,
     rssi: i32,
     battery: Option<i32>,
+    batteries: Vec<bt_backend::Battery>,
     audio_profiles: Vec<bt_backend::AudioProfile>,
 }
 
@@ -456,6 +457,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     trusted: d.trusted,
                     rssi: d.rssi,
                     battery: d.battery,
+                    batteries: d.batteries,
                     audio_profiles: d.audio_profiles,
                 }
             }).collect();
@@ -478,6 +480,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }).collect();
 
+                        let slint_batteries: Vec<BatteryInfo> = d.batteries.into_iter().map(|b| {
+                            BatteryInfo {
+                                label: b.label.into(),
+                                percentage: b.percentage,
+                            }
+                        }).collect();
+
                         BluetoothDevice {
                             name: d.name.into(),
                             address: d.address.into(),
@@ -486,6 +495,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             trusted: d.trusted,
                             rssi: d.rssi,
                             battery: d.battery.unwrap_or(0),
+                            batteries: ModelRc::new(VecModel::from(slint_batteries)),
                             icon: icon.into(),
                             icon_color,
                             audio_profiles: ModelRc::new(VecModel::from(slint_profiles)),

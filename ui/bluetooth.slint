@@ -7,6 +7,11 @@ export struct AudioProfile {
     available: bool,
 }
 
+export struct BatteryInfo {
+    label: string,
+    percentage: int,
+}
+
 export struct BluetoothDevice {
     name: string,
     address: string,
@@ -15,6 +20,7 @@ export struct BluetoothDevice {
     trusted: bool,
     rssi: int,
     battery: int,
+    batteries: [BatteryInfo],
     icon: string,
     icon_color: color,
     audio_profiles: [AudioProfile],
@@ -453,11 +459,11 @@ export component AppWindow inherits Window {
                                                 color: Palette.accent;
                                                 vertical-alignment: center;
                                             }
-                                            if (dev.battery > 0) : Text {
-                                                text: "󰁹 " + dev.battery + "%";
+                                            for bat in dev.batteries : Text {
+                                                text: "󰁹 " + (bat.label != "" ? bat.label + " " : "") + bat.percentage + "%";
                                                 font-size: 10px;
                                                 font-weight: 900;
-                                                color: dev.battery < 20 ? #ff0055 : (dev.battery < 50 ? #f5c211 : #00ffaa);
+                                                color: bat.percentage < 20 ? #ff0055 : (bat.percentage < 50 ? #f5c211 : #00ffaa);
                                                 vertical-alignment: center;
                                             }
                                         }

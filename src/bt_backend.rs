@@ -1,3 +1,6 @@
+// Shared with the `auralink-bt` binary; not every item is used by the `auralink` binary.
+#![allow(dead_code)]
+
 use std::process::Command;
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +28,14 @@ pub struct AudioProfile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Battery {
+    /// Empty for a single/whole-device battery; otherwise a component name
+    /// such as "Left", "Right" or "Case" derived from the D-Bus object path.
+    pub label: String,
+    pub percentage: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BluetoothDevice {
     pub name: String,
     pub address: String,
@@ -33,7 +44,93 @@ pub struct BluetoothDevice {
     pub trusted: bool,
     pub rssi: i32,
     pub battery: Option<i32>,
+    pub batteries: Vec<Battery>,
     pub audio_profiles: Vec<AudioProfile>,
+}
+
+/// Enumerate every `org.bluez.Battery1` object that belongs to a device.
+///
+/// Standard BlueZ exposes a single `Battery1` on the device path. Some TWS
+/// earbuds / firmware expose one per component (left/right/case) on child
+/// paths. We discover all of them via the object tree and read each
+/// `Percentage`, so the UI renders however many actually exist (1, 2 or 3).
+fn get_batteries(address: &str) -> Vec<Battery> {
+    if !is_valid_mac(address) {
+        return Vec::new();
+    }
+    let dev_id = format!("dev_{}", address.replace(':', "_"));
+
+    // Collect candidate object paths for this device (the device path itself
+    // plus any descendants) from the bluez object tree.
+    let tree = match Command::new("busctl")
+        .args(["--system", "tree", "org.bluez"])
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+    let tree = String::from_utf8_lossy(&tree.stdout);
+    let mut paths: Vec<String> = Vec::new();
+    for line in tree.lines() {
+        if let Some(idx) = line.find("/org/bluez/") {
+            let path = line[idx..].trim().to_string();
+            if path.contains(&dev_id) && !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+    }
+
+    let mut batteries: Vec<Battery> = Vec::new();
+    for path in &paths {
+        let out = Command::new("busctl")
+            .args([
+                "--system",
+                "get-property",
+                "org.bluez",
+                path,
+                "org.bluez.Battery1",
+                "Percentage",
+            ])
+            .output();
+        let Ok(out) = out else { continue };
+        if !out.status.success() {
+            continue;
+        }
+        // Output is a typed value, e.g. "y 10\n".
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if let Some(num) = stdout.trim().strip_prefix("y ") {
+            if let Ok(pct) = num.trim().parse::<i32>() {
+                let label = battery_label(path, &dev_id);
+                batteries.push(Battery { label, percentage: pct });
+            }
+        }
+    }
+    batteries
+}
+
+/// Derive a human-readable label from a battery object path. The whole-device
+/// battery (path ends with the device id) gets an empty label; component
+/// batteries are named from the trailing path segment.
+fn battery_label(path: &str, dev_id: &str) -> String {
+    let suffix = path.rsplit('/').next().unwrap_or("");
+    if suffix == dev_id || suffix.is_empty() {
+        return String::new();
+    }
+    let lower = suffix.to_lowercase();
+    if lower.contains("left") {
+        "Left".to_string()
+    } else if lower.contains("right") {
+        "Right".to_string()
+    } else if lower.contains("case") {
+        "Case".to_string()
+    } else {
+        // Title-case the raw segment as a best effort.
+        let mut chars = suffix.chars();
+        match chars.next() {
+            Some(c) => c.to_uppercase().chain(chars).collect(),
+            None => String::new(),
+        }
+    }
 }
 
 pub fn list_devices() -> Vec<BluetoothDevice> {
@@ -66,6 +163,7 @@ pub fn list_devices() -> Vec<BluetoothDevice> {
                     trusted: false,
                     rssi: 0,
                     battery: None,
+                    batteries: Vec::new(),
                     audio_profiles: Vec::new(),
                 });
             }
@@ -98,6 +196,7 @@ pub fn get_device_info(address: &str) -> Option<BluetoothDevice> {
         trusted: false,
         rssi: 0,
         battery: None,
+        batteries: Vec::new(),
         audio_profiles: Vec::new(),
     };
 
@@ -130,8 +229,20 @@ pub fn get_device_info(address: &str) -> Option<BluetoothDevice> {
 
     if dev.connected {
         dev.audio_profiles = get_audio_profiles(address);
+        dev.batteries = get_batteries(address);
     }
-    
+
+    // Ensure `batteries` is always populated: fall back to the single value
+    // parsed from `bluetoothctl info` when per-component data isn't exposed.
+    if dev.batteries.is_empty() {
+        if let Some(pct) = dev.battery {
+            dev.batteries.push(Battery { label: String::new(), percentage: pct });
+        }
+    } else if dev.battery.is_none() {
+        // Keep the legacy single field meaningful (lowest component).
+        dev.battery = dev.batteries.iter().map(|b| b.percentage).min();
+    }
+
     Some(dev)
 }
 
@@ -274,6 +385,23 @@ pub fn set_power(enable: bool) -> bool {
         .unwrap_or(false)
 }
 
+pub fn toggle_power(enable: bool) -> bool {
+    set_power(enable)
+}
+
+pub fn is_powered() -> bool {
+    let output = Command::new("bluetoothctl")
+        .args(["show"])
+        .output()
+        .ok();
+        
+    if let Some(o) = output {
+        let stdout = String::from_utf8_lossy(&o.stdout);
+        return stdout.contains("Powered: yes");
+    }
+    false
+}
+
 pub fn start_scan() -> bool {
     stop_scan();
 
@@ -322,19 +450,6 @@ pub fn list_connected_devices() -> Vec<BluetoothDevice> {
         }
     }
     devices
-}
-
-pub fn is_powered() -> bool {
-    let output = Command::new("bluetoothctl")
-        .args(["show"])
-        .output()
-        .ok();
-        
-    if let Some(o) = output {
-        let stdout = String::from_utf8_lossy(&o.stdout);
-        return stdout.contains("Powered: yes");
-    }
-    false
 }
 
 pub fn list_trusted() -> Vec<String> {

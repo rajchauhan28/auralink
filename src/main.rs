@@ -1,4 +1,5 @@
 mod nm_backend;
+mod bt_backend;
 
 use slint::{VecModel, Color, ModelRc, ComponentHandle};
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
@@ -38,6 +39,12 @@ impl AppConfig {
             let _ = std::fs::write(path, s);
         }
     }
+}
+
+fn send_notification(summary: &str, body: &str) {
+    let _ = std::process::Command::new("notify-send")
+        .args([summary, body])
+        .spawn();
 }
 
 fn format_speed(bytes_per_sec: f64) -> String {
@@ -83,7 +90,10 @@ fn apply_pywal_theme(handle: slint::Weak<WifiWindow>) {
             let fg = parse_hex(wal.special.get("foreground").unwrap_or(&"#f8fafc".to_string())).unwrap_or(Color::from_rgb_u8(248, 250, 252));
             // Usually color1 or color4 is a good accent
             let accent = parse_hex(wal.colors.get("color1").unwrap_or(&"#00f0ff".to_string())).unwrap_or(Color::from_rgb_u8(0, 240, 255));
-            
+            // Distinct hues for danger (disconnect/forget) and upload graph
+            let danger = parse_hex(wal.colors.get("color5").unwrap_or(&"#ff0055".to_string())).unwrap_or(Color::from_rgb_u8(255, 0, 85));
+            let upload = parse_hex(wal.colors.get("color2").unwrap_or(&"#ff0055".to_string())).unwrap_or(Color::from_rgb_u8(255, 0, 85));
+
             let card_bg = Color::from_argb_u8(255, 
                 (bg.red() as i16 + 15).clamp(0, 255) as u8,
                 (bg.green() as i16 + 15).clamp(0, 255) as u8,
@@ -99,6 +109,8 @@ fn apply_pywal_theme(handle: slint::Weak<WifiWindow>) {
                     palette.set_card_bg(card_bg);
                     palette.set_secondary_fg(Color::from_argb_u8(180, fg.red(), fg.green(), fg.blue()));
                     palette.set_separator(Color::from_argb_u8(60, fg.red(), fg.green(), fg.blue()));
+                    palette.set_danger(danger);
+                    palette.set_upload(upload);
                 }
             });
         }
@@ -215,6 +227,8 @@ async fn main() -> Result<(), slint::PlatformError> {
                         p.set_foreground(parse_hex("#f8fafc").unwrap());
                         p.set_secondary_fg(parse_hex("#a1a1aa").unwrap());
                         p.set_separator(parse_hex("#27272a").unwrap());
+                        p.set_danger(parse_hex("#ff0055").unwrap());
+                        p.set_upload(parse_hex("#ff0055").unwrap());
                     }
                 });
             }
@@ -242,6 +256,11 @@ async fn main() -> Result<(), slint::PlatformError> {
                     ui.set_status_msg(if success { "Disconnected".into() } else { "Disconnect failed".into() });
                 }
             });
+            if success {
+                send_notification("Wi-Fi", "Disconnected successfully");
+            } else {
+                send_notification("Wi-Fi", "Disconnect failed");
+            }
         });
     });
 
@@ -251,11 +270,17 @@ async fn main() -> Result<(), slint::PlatformError> {
         let ww = window_weak.clone();
         std::thread::spawn(move || {
             let success = nm_backend::forget_network(&ssid);
+            let ssid_msg = ssid.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ww.upgrade() {
-                    ui.set_status_msg(if success { format!("Forgot {}", ssid) } else { format!("Failed to forget {}", ssid) }.into());
+                    ui.set_status_msg(if success { format!("Forgot {}", ssid_msg) } else { format!("Failed to forget {}", ssid_msg) }.into());
                 }
             });
+            if success {
+                send_notification("Wi-Fi", &format!("Forgot network: {}", ssid));
+            } else {
+                send_notification("Wi-Fi", &format!("Failed to forget network: {}", ssid));
+            }
         });
     });
 
@@ -318,6 +343,11 @@ async fn main() -> Result<(), slint::PlatformError> {
                     ui.set_status_msg(if success { "Settings saved".to_string() } else { "Save failed".to_string() }.into());
                 }
             });
+            if success {
+                send_notification("Wi-Fi", &format!("Settings saved for {}", ssid));
+            } else {
+                send_notification("Wi-Fi", &format!("Failed to save settings for {}", ssid));
+            }
         });
     });
 
@@ -339,12 +369,18 @@ async fn main() -> Result<(), slint::PlatformError> {
             let ww = window_weak.clone();
             std::thread::spawn(move || {
                 let success = nm_backend::connect_to_wifi(&ssid, password.as_deref());
+                let ssid_msg = ssid.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = ww.upgrade() {
                         ui.set_is_connecting(false);
-                        ui.set_status_msg(if success { format!("Connected to {}", ssid).into() } else { "Failed!".into() });
+                        ui.set_status_msg(if success { format!("Connected to {}", ssid_msg).into() } else { "Failed!".into() });
                     }
                 });
+                if success {
+                    send_notification("Wi-Fi", &format!("Connected to {}", ssid));
+                } else {
+                    send_notification("Wi-Fi", &format!("Failed to connect to {}", ssid));
+                }
             });
         }
     });
@@ -357,11 +393,40 @@ async fn main() -> Result<(), slint::PlatformError> {
         std::thread::spawn(move || {
             let success = nm_backend::toggle_vpn(&name, &vtype, active);
             if !success {
+                let name_msg = name.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = ww.upgrade() {
-                        ui.set_status_msg(format!("VPN Toggle Failed for {}", name).into());
+                        ui.set_status_msg(format!("VPN Toggle Failed for {}", name_msg).into());
                     }
                 });
+                send_notification("VPN", &format!("Failed to toggle VPN: {}", name));
+            } else {
+                send_notification("VPN", &format!("VPN {} toggled {}", name, if active { "on" } else { "off" }));
+            }
+        });
+    });
+
+    let window_weak = main_window.as_weak();
+    main_window.on_toggle_airplane_mode(move |enabled| {
+        let ww = window_weak.clone();
+        std::thread::spawn(move || {
+            nm_backend::AIRPLANE_MODE.store(enabled, Ordering::SeqCst);
+            let wifi_on = nm_backend::toggle_wifi_power(!enabled);
+            let bt_powered = bt_backend::toggle_power(!enabled);
+            let success = wifi_on || bt_powered;
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ww.upgrade() {
+                    ui.set_status_msg(if success {
+                        format!("Airplane Mode: {}", if enabled { "ON" } else { "OFF" })
+                    } else {
+                        format!("Failed to toggle Airplane Mode")
+                    }.into());
+                }
+            });
+            if success {
+                send_notification("Airplane Mode", &format!("Airplane Mode: {}", if enabled { "ON" } else { "OFF" }));
+            } else {
+                send_notification("Airplane Mode", "Failed to toggle radios");
             }
         });
     });

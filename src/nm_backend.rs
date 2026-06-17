@@ -1,4 +1,7 @@
 use std::process::Command;
+use std::sync::atomic::AtomicBool;
+
+pub static AIRPLANE_MODE: AtomicBool = AtomicBool::new(false);
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -513,21 +516,18 @@ pub fn connect_to_wifi(ssid: &str, password: Option<&str>) -> bool {
 }
 
 pub fn disconnect_wifi() -> bool {
-    let output = Command::new("nmcli")
-        .args(["-t", "-f", "DEVICE,TYPE,STATE", "dev"])
+    Command::new("nmcli")
+        .args(["device", "disconnect", "wifi"])
         .output()
-        .ok();
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
 
-    if let Some(o) = output {
-        let stdout = String::from_utf8_lossy(&o.stdout);
-        for line in stdout.lines() {
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() >= 3 && parts[1] == "wifi" && parts[2] == "connected" {
-                let dev = parts[0];
-                let _ = Command::new("nmcli").args(["dev", "disconnect", dev]).output();
-                return true;
-            }
-        }
-    }
-    false
+pub fn toggle_wifi_power(enabled: bool) -> bool {
+    let state = if enabled { "on" } else { "off" };
+    Command::new("nmcli")
+        .args(["radio", "wifi", state])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
