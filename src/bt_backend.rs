@@ -205,10 +205,14 @@ fn battery_label(path: &str, dev_id: &str) -> String {
 }
 
 pub fn list_devices() -> Vec<BluetoothDevice> {
-    let output = Command::new("bluetoothctl")
-        .arg("devices")
-        .output()
-        .expect("failed to execute bluetoothctl");
+    // bluez-utils is an optional dependency, so bluetoothctl is not guaranteed
+    // to exist. The previous .expect() turned "Bluetooth tooling not
+    // installed" into a panic that took the whole application down; an empty
+    // device list is the honest answer.
+    let output = match Command::new("bluetoothctl").arg("devices").output() {
+        Ok(output) => output,
+        Err(_) => return Vec::new(),
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut devices = Vec::new();
