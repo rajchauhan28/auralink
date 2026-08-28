@@ -30,8 +30,16 @@
 
 ## 📦 Installation
 
+Prebuilt packages for Arch, Debian and Fedora are attached to every
+[release](https://github.com/rajchauhan28/auralink/releases). Each one is built
+inside that distribution's own container, so it links against the right glibc.
+
 ### Arch Linux
-Clone the repo and build using `makepkg`:
+```bash
+sudo pacman -U auralink-*-x86_64.pkg.tar.zst
+```
+
+Or build from the tree:
 ```bash
 git clone https://github.com/rajchauhan28/auralink.git
 cd auralink
@@ -39,18 +47,44 @@ makepkg -si
 ```
 
 ### Debian / Ubuntu
-Download the `.deb` from the [releases page](https://github.com/rajchauhan28/auralink/releases) and install:
 ```bash
-sudo dpkg -i auralink_0.1.4_amd64.deb
-sudo apt-get install -f
+sudo apt install ./auralink_*_amd64.deb
 ```
 
-### AppImage (Universal)
-Download the `AuraLink-x86_64.AppImage` from the [releases page](https://github.com/rajchauhan28/auralink/releases).
+### Fedora
 ```bash
-chmod +x AuraLink-x86_64.AppImage
-./AuraLink-x86_64.AppImage
+sudo dnf install ./auralink-*.x86_64.rpm
 ```
+
+### From source
+```bash
+git clone https://github.com/rajchauhan28/auralink.git
+cd auralink
+cargo build --release
+./install.sh
+```
+
+`install.sh` installs into `~/.local` and enables the Bluetooth auto-connect
+daemon, repointing the systemd unit at `~/.local/bin` instead of the
+`/usr/bin` path the packages use.
+
+### Bluetooth auto-connect
+
+Every install method ships `auralink-bt-daemon.service`, which reconnects
+trusted devices as they come back into range. Packages install it to
+`/usr/lib/systemd/user`; enable it per user:
+
+```bash
+systemctl --user enable --now auralink-bt-daemon.service
+```
+
+### Building the packages yourself
+
+```bash
+./scripts/build-packages.sh all      # or: arch | deb | rpm
+```
+
+Requires Docker. Packages land in `dist/`.
 
 ## 🛠 Building from source
 
