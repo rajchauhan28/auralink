@@ -52,7 +52,10 @@ cp auralink.desktop auralink-bt.desktop "$APP_DIR/"
 chmod 644 "$APP_DIR/auralink.desktop" "$APP_DIR/auralink-bt.desktop"
 
 echo "Installing the Bluetooth auto-connect daemon service..."
-cp "$UNIT" "$UNIT_DIR/"
+# The committed unit points at /usr/bin so the distro packages work. A
+# source install puts the binary in ~/.local/bin instead, so repoint it.
+sed 's|^ExecStart=/usr/bin/auralink-bt|ExecStart=%h/.local/bin/auralink-bt|' \
+    "$UNIT" > "$UNIT_DIR/$UNIT"
 # This repository may live on a filesystem that forces mode 777 (an NTFS
 # mount, say) and `cp` carries that across; systemd rejects a world-writable
 # unit file.

@@ -1,10 +1,13 @@
 [package]
 name = "auralink"
-version = "0.1.6"
+version = "0.1.7"
 description = "A blazing-fast, aesthetic Wi-Fi, VPN, and Bluetooth manager for Linux. Built with Rust and Slint, featuring live Pywal sync."
 edition = "2024"
 keywords = ["linux", "rust", "network-manager", "vpn", "bluetooth", "pywal", "aesthetic"]
 categories = ["network-programming", "os::linux-apis", "gui"]
+license = "MIT"
+repository = "https://github.com/rajchauhan28/auralink"
+readme = "README.md"
 
 [[bin]]
 name = "auralink"
@@ -18,16 +21,40 @@ path = "src/bt_main.rs"
 name = "auralink"
 maintainer = "rajchauhan28"
 copyright = "2026, rajchauhan28"
-license-file = ["README.md", "0"]
-depends = "libc6, libstdc++6, libgcc-s1"
+license-file = ["LICENSE", "0"]
+extended-description = "AuraLink is a Wi-Fi, VPN and Bluetooth manager for Linux with a Slint UI and live Pywal colour sync. It ships a tray-less GUI plus auralink-bt, a Bluetooth auto-connect daemon."
 section = "net"
 priority = "optional"
+# $auto makes dpkg-shlibdeps derive the real shared-library dependencies.
+# The tools below are invoked at runtime, not linked, so shlibdeps cannot
+# see them and they have to be named explicitly.
+depends = "$auto, network-manager"
+recommends = "bluez, libnotify-bin"
 assets = [
     ["target/release/auralink", "usr/bin/auralink", "755"],
     ["target/release/auralink-bt", "usr/bin/auralink-bt", "755"],
     ["auralink.desktop", "usr/share/applications/auralink.desktop", "644"],
     ["auralink-bt.desktop", "usr/share/applications/auralink-bt.desktop", "644"],
     ["assets/auralink.svg", "usr/share/icons/hicolor/scalable/apps/auralink.svg", "644"],
+    ["auralink-bt-daemon.service", "usr/lib/systemd/user/auralink-bt-daemon.service", "644"],
+    ["README.md", "usr/share/doc/auralink/README.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+summary = "Wi-Fi, VPN and Bluetooth manager for Linux"
+license = "MIT"
+# Shared libraries are auto-detected by rpmbuild's dependency generator;
+# these are the runtime commands AuraLink shells out to.
+requires = { NetworkManager = "*" }
+assets = [
+    { source = "target/release/auralink", dest = "/usr/bin/auralink", mode = "755" },
+    { source = "target/release/auralink-bt", dest = "/usr/bin/auralink-bt", mode = "755" },
+    { source = "auralink.desktop", dest = "/usr/share/applications/auralink.desktop", mode = "644" },
+    { source = "auralink-bt.desktop", dest = "/usr/share/applications/auralink-bt.desktop", mode = "644" },
+    { source = "assets/auralink.svg", dest = "/usr/share/icons/hicolor/scalable/apps/auralink.svg", mode = "644" },
+    { source = "auralink-bt-daemon.service", dest = "/usr/lib/systemd/user/auralink-bt-daemon.service", mode = "644" },
+    { source = "LICENSE", dest = "/usr/share/licenses/auralink/LICENSE", mode = "644", doc = true },
+    { source = "README.md", dest = "/usr/share/doc/auralink/README.md", mode = "644", doc = true },
 ]
 
 [dependencies]

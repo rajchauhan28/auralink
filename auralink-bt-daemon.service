@@ -14,7 +14,10 @@ StartLimitBurst=10
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/auralink-bt daemon
+# Absolute path so the distribution packages, which install to /usr/bin,
+# get a working unit. install.sh rewrites this to %h/.local/bin for a
+# from-source install into the user's home.
+ExecStart=/usr/bin/auralink-bt daemon
 # The loop is not supposed to terminate, so restart on a clean exit too.
 Restart=always
 RestartSec=5

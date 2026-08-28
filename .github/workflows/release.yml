@@ -1,0 +1,125 @@
+name: Release
+
+# Tagging v* builds every package and publishes them to the release.
+# Each package is built inside its own distribution's container so the
+# binary links against the glibc it will actually run against; building
+# them all on ubuntu-latest would ship Debian's glibc to Fedora and Arch.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  debian:
+    name: Debian package
+    runs-on: ubuntu-latest
+    container: debian:bookworm
+    steps:
+      - name: Install build dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y -qq build-essential curl ca-certificates git \
+            pkg-config libfontconfig1-dev libxkbcommon-dev libwayland-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+
+      - name: Build package
+        run: cargo deb --output dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: dist/*.deb
+
+  fedora:
+    name: Fedora package
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Install build dependencies
+        run: |
+          dnf install -y -q gcc gcc-c++ curl git pkgconf-pkg-config rpm-build \
+            fontconfig-devel libxkbcommon-devel wayland-devel libX11-devel \
+            libXcursor-devel libXrandr-devel libXi-devel mesa-libGL-devel
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-generate-rpm
+        run: cargo install cargo-generate-rpm --locked
+
+      - name: Build package
+        run: |
+          cargo build --release
+          strip -s target/release/auralink target/release/auralink-bt || true
+          cargo generate-rpm --output dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm
+          path: dist/*.rpm
+
+  archlinux:
+    name: Arch package
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git curl rustup \
+            fontconfig libxkbcommon wayland libx11
+          rustup default stable
+
+      - uses: actions/checkout@v4
+
+      - name: Build package
+        run: |
+          # makepkg refuses to run as root.
+          useradd -m builder
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)"/\1/')
+          git config --global --add safe.directory "$PWD"
+          git archive --format=tar.gz --prefix=auralink-build/ \
+            -o "/home/builder/auralink-${VERSION}.tar.gz" HEAD
+          cp PKGBUILD /home/builder/
+          chown -R builder:builder /home/builder
+          su builder -c 'cd /home/builder && makepkg -f --noconfirm --skipinteg'
+          mkdir -p dist
+          cp /home/builder/*.pkg.tar.zst dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch
+          path: dist/*.pkg.tar.zst
+
+  release:
+    name: Publish release
+    needs: [debian, fedora, archlinux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lhR dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

@@ -22,3 +22,7 @@
 
 # Agent scratch
 .claude/
+
+# packaging output
+/dist/
+/build/
