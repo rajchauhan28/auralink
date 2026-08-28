@@ -1,0 +1,23 @@
+[Unit]
+Description=AuraLink Bluetooth Auto-Connect Daemon
+Documentation=https://github.com/rajchauhan28/auralink
+# bluetooth.target and sound.target are SYSTEM units; a user unit cannot order
+# itself against them, so listing them here achieved nothing. The daemon polls
+# and simply finds no adapter until BlueZ is up, which is the correct
+# behaviour either way -- including after a `systemctl restart bluetooth`.
+After=graphical-session.target
+PartOf=graphical-session.target
+# Crash-looping against a broken BlueZ should back off rather than spin.
+# These are [Unit] keys; systemd ignores them under [Service].
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/auralink-bt daemon
+# The loop is not supposed to terminate, so restart on a clean exit too.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

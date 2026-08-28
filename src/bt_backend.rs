@@ -1,8 +1,58 @@
 // Shared with the `auralink-bt` binary; not every item is used by the `auralink` binary.
 #![allow(dead_code)]
 
-use std::process::Command;
+use std::process::{Child, Command};
+use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
+
+/// Run `bluetoothctl` with a hard session timeout, returning its combined
+/// output.
+///
+/// Every call in this file used to be a bare `bluetoothctl <cmd>` read through
+/// `.output()`. That BLOCKS FOREVER when the target device is out of range --
+/// measured here: `bluetoothctl connect <unreachable-mac>` never returns,
+/// while `bluetoothctl --timeout 5 connect <same>` exits after exactly 5s. In
+/// the auto-connect daemon the unbounded form wedged the entire loop on the
+/// first attempt at an absent device, which is the *normal* state for earbuds
+/// sitting in their case.
+///
+/// Returns None only if bluetoothctl could not be spawned at all.
+fn bluetoothctl(timeout_secs: u32, args: &[&str]) -> Option<String> {
+    let timeout = timeout_secs.to_string();
+    let mut full: Vec<&str> = vec!["--timeout", timeout.as_str()];
+    full.extend_from_slice(args);
+
+    Command::new("bluetoothctl")
+        .args(&full)
+        .output()
+        .ok()
+        .map(|o| {
+            let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&o.stderr));
+            text
+        })
+}
+
+/// Did a bluetoothctl operation actually succeed?
+///
+/// `bluetoothctl` exits 0 whether the operation worked or not -- it reports
+/// the outcome only in its text -- so `o.status.success()`, which every caller
+/// here relied on, was always true and every failure was reported as success.
+fn bluetoothctl_ok(output: Option<String>, success_marker: &str) -> bool {
+    match output {
+        Some(text) => {
+            let lower = text.to_lowercase();
+            if lower.contains("failed")
+                || lower.contains("not available")
+                || lower.contains("org.bluez.error")
+            {
+                return false;
+            }
+            text.contains(success_marker)
+        }
+        None => false,
+    }
+}
 
 fn is_valid_mac(addr: &str) -> bool {
     let parts: Vec<&str> = addr.split(':').collect();
@@ -59,9 +109,32 @@ fn get_batteries(address: &str) -> Vec<Battery> {
         return Vec::new();
     }
     let dev_id = format!("dev_{}", address.replace(':', "_"));
+    let dev_path = format!("/org/bluez/hci0/{}", dev_id);
 
-    // Collect candidate object paths for this device (the device path itself
-    // plus any descendants) from the bluez object tree.
+    // Direct property check for standard devices to avoid spawning expensive busctl tree commands
+    let out = Command::new("busctl")
+        .args([
+            "--system",
+            "get-property",
+            "org.bluez",
+            &dev_path,
+            "org.bluez.Battery1",
+            "Percentage",
+        ])
+        .output();
+
+    let mut batteries = Vec::new();
+    if let Ok(out) = out && out.status.success() {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if let Some(num) = stdout.trim().strip_prefix("y ") {
+            if let Ok(pct) = num.trim().parse::<i32>() {
+                batteries.push(Battery { label: String::new(), percentage: pct });
+                return batteries;
+            }
+        }
+    }
+
+    // Fall back to scanning object tree for multi-component devices (e.g. Left/Right/Case)
     let tree = match Command::new("busctl")
         .args(["--system", "tree", "org.bluez"])
         .output()
@@ -80,7 +153,6 @@ fn get_batteries(address: &str) -> Vec<Battery> {
         }
     }
 
-    let mut batteries: Vec<Battery> = Vec::new();
     for path in &paths {
         let out = Command::new("busctl")
             .args([
@@ -96,7 +168,6 @@ fn get_batteries(address: &str) -> Vec<Battery> {
         if !out.status.success() {
             continue;
         }
-        // Output is a typed value, e.g. "y 10\n".
         let stdout = String::from_utf8_lossy(&out.stdout);
         if let Some(num) = stdout.trim().strip_prefix("y ") {
             if let Ok(pct) = num.trim().parse::<i32>() {
@@ -336,53 +407,33 @@ pub fn set_audio_profile(address: &str, profile_name: &str) -> bool {
 }
 
 pub fn connect(address: &str) -> bool {
-    Command::new("bluetoothctl")
-        .args(["connect", address])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    // 20s: long enough for a paged device to answer, short enough that a UI
+    // click does not appear to hang.
+    bluetoothctl_ok(bluetoothctl(20, &["connect", address]), "Connection successful")
 }
 
 pub fn disconnect(address: &str) -> bool {
-    Command::new("bluetoothctl")
-        .args(["disconnect", address])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    bluetoothctl_ok(bluetoothctl(10, &["disconnect", address]), "Successful disconnected")
 }
 
 pub fn pair(address: &str) -> bool {
-    Command::new("bluetoothctl")
-        .args(["pair", address])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    // Pairing can involve user confirmation on the peer, so allow longer.
+    bluetoothctl_ok(bluetoothctl(30, &["pair", address]), "Pairing successful")
 }
 
 pub fn trust(address: &str, enable: bool) -> bool {
     let cmd = if enable { "trust" } else { "untrust" };
-    Command::new("bluetoothctl")
-        .args([cmd, address])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    let marker = if enable { "trust succeeded" } else { "untrust succeeded" };
+    bluetoothctl_ok(bluetoothctl(10, &[cmd, address]), marker)
 }
 
 pub fn remove(address: &str) -> bool {
-    Command::new("bluetoothctl")
-        .args(["remove", address])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    bluetoothctl_ok(bluetoothctl(10, &["remove", address]), "Device has been removed")
 }
 
 pub fn set_power(enable: bool) -> bool {
     let state = if enable { "on" } else { "off" };
-    Command::new("bluetoothctl")
-        .args(["power", state])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    bluetoothctl_ok(bluetoothctl(10, &["power", state]), "succeeded")
 }
 
 pub fn toggle_power(enable: bool) -> bool {
@@ -402,32 +453,69 @@ pub fn is_powered() -> bool {
     false
 }
 
+/// The `bluetoothctl ... scan on` child, if discovery is running.
+///
+/// Discovery needs a bluetoothctl session held open, so it has to be a
+/// long-lived child. It is tracked here so it can be killed AND REAPED:
+/// `start_scan` previously did `.spawn().is_ok()` and dropped the handle, so
+/// nothing ever waited on the child. In the GUI that leaked a zombie now and
+/// then; in the auto-connect daemon, which restarts discovery every time the
+/// 60s session expires, it leaked one every minute for the life of the login
+/// session.
+static SCAN_CHILD: Mutex<Option<Child>> = Mutex::new(None);
+
+/// How long a single discovery session runs before bluetoothctl exits.
+pub const SCAN_SESSION_SECS: u64 = 60;
+
 pub fn start_scan() -> bool {
     stop_scan();
 
-    let _ = Command::new("bluetoothctl")
-        .args(["power", "on"])
-        .output();
+    let _ = bluetoothctl(5, &["power", "on"]);
 
-    Command::new("bluetoothctl")
+    match Command::new("bluetoothctl")
         .args(["--timeout", "60", "scan", "on"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
-        .is_ok()
+    {
+        Ok(child) => {
+            if let Ok(mut slot) = SCAN_CHILD.lock() {
+                *slot = Some(child);
+            }
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// True while a discovery session this process started is still alive.
+pub fn scan_running() -> bool {
+    let Ok(mut slot) = SCAN_CHILD.lock() else { return false };
+    match slot.as_mut() {
+        // try_wait reaps it the moment it exits, so the 60s session ending
+        // does not leave a zombie behind either.
+        Some(child) => match child.try_wait() {
+            Ok(Some(_)) => { *slot = None; false }
+            Ok(None) => true,
+            Err(_) => { *slot = None; false }
+        },
+        None => false,
+    }
 }
 
 pub fn stop_scan() -> bool {
-    // Kill any existing bluetoothctl scan processes started by start_scan
-    // This is necessary because bluetoothctl scan on must be kept open to maintain discovery.
-    let _ = Command::new("pkill")
-        .args(["-f", "bluetoothctl.*scan on"])
-        .output();
+    // Kill and reap our own child rather than pkill'ing by pattern -- a
+    // `pkill -f "bluetoothctl.*scan on"` also matches any scan the user
+    // started by hand, and any process whose command line merely mentions it.
+    if let Ok(mut slot) = SCAN_CHILD.lock()
+        && let Some(mut child) = slot.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     
-    // Also try the official way
-    Command::new("bluetoothctl")
-        .args(["scan", "off"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    // Also ask politely. Bounded like every other bluetoothctl call.
+    bluetoothctl(5, &["scan", "off"]).is_some()
 }
 
 pub fn list_connected_devices() -> Vec<BluetoothDevice> {
@@ -452,29 +540,69 @@ pub fn list_connected_devices() -> Vec<BluetoothDevice> {
     devices
 }
 
-pub fn list_trusted() -> Vec<String> {
+/// Every Bluetooth adapter BlueZ currently exposes, e.g. ["hci0"].
+///
+/// The device lookups below used to hardcode `hci0`. A USB dongle, a second
+/// radio, or a controller that comes back as `hci1` after a suspend/resume
+/// renumber left the auto-connect daemon looking at a path with no devices
+/// under it -- so it found nothing to connect and did nothing, silently.
+fn list_adapters() -> Vec<String> {
     let output = Command::new("dbus-send")
-        .args(["--system", "--dest=org.bluez", "--print-reply", 
-                "/org/bluez/hci0", "org.freedesktop.DBus.Introspectable.Introspect"])
+        .args(["--system", "--dest=org.bluez", "--print-reply",
+               "/org/bluez", "org.freedesktop.DBus.Introspectable.Introspect"])
         .output()
         .ok();
 
-    let mut result = Vec::new();
+    let mut adapters = Vec::new();
     if let Some(o) = output {
         let xml = String::from_utf8_lossy(&o.stdout);
-        
+        for node in xml.split("node name=\"").skip(1) {
+            if let Some(end) = node.find('\"') {
+                let name = &node[..end];
+                if name.starts_with("hci") {
+                    adapters.push(name.to_string());
+                }
+            }
+        }
+    }
+
+    // Never return empty: a caller that gets no adapters would do nothing at
+    // all, and hci0 is right on the overwhelming majority of machines.
+    if adapters.is_empty() {
+        adapters.push("hci0".to_string());
+    }
+    adapters
+}
+
+pub fn list_trusted() -> Vec<String> {
+    let mut result = Vec::new();
+
+    for adapter in list_adapters() {
+        let output = Command::new("dbus-send")
+            .args(["--system", "--dest=org.bluez", "--print-reply",
+                   &format!("/org/bluez/{}", adapter),
+                   "org.freedesktop.DBus.Introspectable.Introspect"])
+            .output()
+            .ok();
+
+        let Some(o) = output else { continue };
+        let xml = String::from_utf8_lossy(&o.stdout);
+
         for dev_tag in xml.split("node name=\"dev_").skip(1) {
             if let Some(end) = dev_tag.find('\"') {
                 let addr_hex = &dev_tag[..end];
                 let addr = addr_hex.replace("_", ":");
-                
+
                 if !is_valid_hex_addr(&addr) {
+                    continue;
+                }
+                if result.contains(&addr) {
                     continue;
                 }
 
                 let out = Command::new("dbus-send")
                     .args(["--system", "--dest=org.bluez", "--print-reply",
-                            &format!("/org/bluez/hci0/dev_{}", addr.replace(':', "_")),
+                            &format!("/org/bluez/{}/dev_{}", adapter, addr.replace(':', "_")),
                             "org.freedesktop.DBus.Properties.Get",
                             "string:org.bluez.Device1", "string:Trusted"])
                     .output()
@@ -520,15 +648,13 @@ pub fn connect_trusted_device(address: &str) -> bool {
             return true;
         }
 
-    let _ = Command::new("bluetoothctl")
-        .args(["trust", address])
-        .output();
+    // Re-assert trust cheaply; it is idempotent and survives a device reset
+    // that cleared the bond.
+    let _ = bluetoothctl(5, &["trust", address]);
 
-    Command::new("bluetoothctl")
-        .args(["connect", address])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    // 15s is the important number: unbounded, this call never returns for a
+    // device that is switched off, and the daemon loop never runs again.
+    bluetoothctl_ok(bluetoothctl(15, &["connect", address]), "Connection successful")
 }
 
 pub fn ensure_switch_on_connect_module() -> bool {
@@ -552,58 +678,92 @@ pub fn ensure_switch_on_connect_module() -> bool {
 }
 
 pub fn force_a2dp_profile(address: &str) -> bool {
-    let card_formatted = address.replace(':', "_");
-    let output = Command::new("pactl")
-        .args(["list", "cards", "short"])
-        .output()
-        .ok();
+    // Switch a freshly connected headset to its best A2DP profile.
+    //
+    // The previous implementation scanned for the card's `Active Profile:` and
+    // used it only if that line already contained "a2dp" -- so it could set
+    // A2DP only when A2DP was *already* active, and was a no-op in exactly the
+    // case it exists for: a device that came up on HSP/HFP. It now reads the
+    // card's `Profiles:` block and picks the highest-priority available A2DP
+    // sink, which is how PipeWire/PulseAudio advertise the real choices:
+    //
+    //   Profiles:
+    //     a2dp-sink-sbc:    ... (priority: 132, available: yes)
+    //     a2dp-sink:        ... codec AAC (priority: 133, available: yes)
+    //     headset-head-unit: ... (priority: 6, available: yes)
+    let card_suffix = address.replace(':', "_");
 
-    if let Some(o) = output {
-        let stdout = String::from_utf8_lossy(&o.stdout);
-        for line in stdout.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 && parts[1].contains(&card_formatted) {
-                let card_name = &parts[1];
-                
-                let profile_output = Command::new("pactl")
-                    .args(["list", "cards"])
-                    .output()
-                    .ok();
+    let Some(output) = Command::new("pactl").args(["list", "cards"]).output().ok() else {
+        return false;
+    };
+    let listing = String::from_utf8_lossy(&output.stdout);
 
-                if let Some(po) = profile_output {
-                    let pstdout = String::from_utf8_lossy(&po.stdout);
-                    let mut in_card = false;
-                    let mut a2dp_profile = String::new();
+    let mut card_name: Option<String> = None;
+    let mut in_card = false;
+    let mut in_profiles = false;
+    let mut active_profile = String::new();
+    let mut best: Option<(i64, String)> = None;
 
-                    for line in pstdout.lines() {
-                        let line = line.trim();
-                        if line.starts_with("Name:") && line.contains(&card_formatted) {
-                            in_card = true;
-                        } else if line.starts_with("Name:") && !line.contains(&card_formatted) {
-                            in_card = false;
-                        }
+    for raw in listing.lines() {
+        let line = raw.trim();
 
-                        if in_card && line.starts_with("Active Profile:") {
-                            let profile = line[15..].trim();
-                            if profile.contains("a2dp") && !profile.contains("handsfree") && !profile.contains("headset") {
-                                a2dp_profile = profile.to_string();
-                                break;
-                            }
-                        }
-                    }
+        if let Some(name) = line.strip_prefix("Name: ") {
+            // A new card block starts here; only stay inside ours.
+            in_card = name.contains(&card_suffix);
+            in_profiles = false;
+            if in_card {
+                card_name = Some(name.to_string());
+            }
+            continue;
+        }
+        if !in_card {
+            continue;
+        }
 
-                    if !a2dp_profile.is_empty() {
-                        return Command::new("pactl")
-                            .args(["set-card-profile", card_name, &a2dp_profile])
-                            .output()
-                            .map(|o| o.status.success())
-                            .unwrap_or(false);
-                    }
-                }
-                break;
+        if line == "Profiles:" {
+            in_profiles = true;
+            continue;
+        }
+        if let Some(active) = line.strip_prefix("Active Profile: ") {
+            active_profile = active.to_string();
+            in_profiles = false;
+            continue;
+        }
+        // Any other unindented section (Ports:, Properties:) ends the list.
+        if in_profiles && line.ends_with(':') && !line.contains(' ') {
+            in_profiles = false;
+            continue;
+        }
+
+        if in_profiles && let Some((name, rest)) = line.split_once(": ") {
+            if !name.starts_with("a2dp-sink") {
+                continue;
+            }
+            if !rest.contains("available: yes") {
+                continue;
+            }
+            let priority = rest
+                .split("priority: ")
+                .nth(1)
+                .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(0);
+            if best.as_ref().is_none_or(|(p, _)| priority > *p) {
+                best = Some((priority, name.to_string()));
             }
         }
     }
 
-    false
+    let (Some(card), Some((_, profile))) = (card_name, best) else {
+        return false;
+    };
+    if active_profile == profile {
+        return true;
+    }
+
+    Command::new("pactl")
+        .args(["set-card-profile", &card, &profile])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
