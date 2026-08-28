@@ -354,55 +354,6 @@ export component WifiWindow inherits Window {
                     Text { text: "󰑐"; font-size: 16px; color: WifiPalette.foreground; }
                     TouchArea { clicked => { refresh(); } }
                 }
-                Rectangle {
-                    width: 32px;
-                    height: 32px;
-                    background: WifiPalette.card-bg;
-                    border-radius: 8px;
-                    Text { text: "⚙"; font-size: 16px; color: WifiPalette.foreground; }
-                    TouchArea { clicked => { toggle_settings(); } }
-                }
-            }
-        }
-
-        if (show_settings) : Rectangle {
-            background: WifiPalette.card-bg;
-            border-radius: 16px;
-            height: 150px;
-            
-            VerticalLayout {
-                padding: 12px;
-                spacing: 12px;
-                
-                WifiThemeToggle {
-                    text: "Pywal Auto-Sync";
-                    checked: pywal_enabled;
-                    toggled(enabled) => { toggle_pywal(enabled); }
-                }
-
-                WifiThemeToggle {
-                    text: "Airplane Mode";
-                    checked: airplane_mode;
-                    toggled(enabled) => { airplane_mode = enabled; toggle_airplane_mode(enabled); }
-                }
-
-                WifiActionButton {
-                    text: "Import VPN Config (.conf, .ovpn)";
-                    clicked => { import_vpn(); }
-                }
-
-                Rectangle {
-                    height: 32px;
-                    background: WifiPalette.accent.with-alpha(0.1);
-                    border-radius: 8px;
-                    border-width: 0;
-                    HorizontalLayout {
-                        alignment: center;
-                        spacing: 8px;
-                        Text { text: "🛠 Advanced Editor (nmtui)"; font-size: 12px; color: WifiPalette.foreground; }
-                    }
-                    TouchArea { clicked => { open_nmtui(); } }
-                }
             }
         }
 

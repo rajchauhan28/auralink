@@ -442,6 +442,7 @@ pub fn update_network_config(ssid: &str, config: NetworkConfig) -> bool {
 
 pub fn get_ping(host: &str) -> Option<u64> {
     let output = Command::new("ping")
+        .env("LC_ALL", "C")
         .args(["-c", "1", "-W", "1", host])
         .output()
         .ok()?;
@@ -454,6 +455,14 @@ pub fn get_ping(host: &str) -> Option<u64> {
             }
     }
     None
+}
+
+pub fn is_wifi_enabled() -> bool {
+    Command::new("nmcli")
+        .args(["radio", "wifi"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "enabled")
+        .unwrap_or(true)
 }
 
 pub fn get_active_interface() -> Option<String> {

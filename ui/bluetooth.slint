@@ -352,37 +352,6 @@ export component AppWindow inherits Window {
                     Text { text: "󰑐"; font-size: 16px; color: Palette.foreground; }
                     TouchArea { clicked => { refresh(); } }
                 }
-                Rectangle {
-                    width: 32px;
-                    height: 32px;
-                    background: Palette.card-bg;
-                    border-radius: 8px;
-                    Text { text: "⚙"; font-size: 16px; color: Palette.foreground; }
-                    TouchArea { clicked => { toggle_settings(); } }
-                }
-            }
-        }
-
-        if (show_settings) : Rectangle {
-            background: Palette.card-bg;
-            border-radius: 16px;
-            height: 100px;
-            
-            VerticalLayout {
-                padding: 12px;
-                spacing: 12px;
-                
-                ThemeToggle {
-                    text: "Pywal Auto-Sync";
-                    checked: pywal_enabled;
-                    toggled(enabled) => { toggle_pywal(enabled); }
-                }
-
-                ThemeToggle {
-                    text: "Bluetooth Power";
-                    checked: bluetooth_enabled;
-                    toggled(enabled) => { toggle_bluetooth(enabled); }
-                }
             }
         }
 

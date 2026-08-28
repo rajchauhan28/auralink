@@ -41,10 +41,19 @@ impl AppConfig {
     }
 }
 
-fn send_notification(summary: &str, body: &str) {
-    let _ = std::process::Command::new("notify-send")
-        .args([summary, body])
-        .spawn();
+fn send_notification(summary: &str, body: &str, icon: Option<&str>) {
+    let mut cmd = std::process::Command::new("notify-send");
+    cmd.args([
+        "-a", "AuraLink",
+        "-t", "3500",
+        "-u", "normal",
+        summary,
+        body,
+    ]);
+    if let Some(ic) = icon {
+        cmd.args(["-i", ic]);
+    }
+    let _ = cmd.spawn();
 }
 
 fn format_speed(bytes_per_sec: f64) -> String {
@@ -122,6 +131,80 @@ async fn main() -> Result<(), slint::PlatformError> {
     if args.len() > 1 {
         let cmd = args[1].as_str();
         match cmd {
+            "popup" | "gui" | "open" => {
+                // Continue to open GUI window
+            }
+            "quickshell" | "qs" => {
+                let home = std::env::var("HOME").unwrap_or_default();
+                let path = format!("{}/.config/quickshell/auralink", home);
+                let _ = std::process::Command::new("quickshell")
+                    .args(["-p", &path])
+                    .spawn();
+                return Ok(());
+            }
+            "connect" => {
+                if args.len() < 3 {
+                    eprintln!("Usage: auralink connect <SSID> [password]");
+                    std::process::exit(1);
+                }
+                let ssid = &args[2];
+                let pass = if args.len() > 3 { Some(args[3].as_str()) } else { None };
+                println!("Connecting to {}...", ssid);
+                let success = nm_backend::connect_to_wifi(ssid, pass);
+                if success {
+                    println!("Successfully connected to {}", ssid);
+                } else {
+                    eprintln!("Failed to connect to {}", ssid);
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+            "disconnect" => {
+                println!("Disconnecting Wi-Fi...");
+                let success = nm_backend::disconnect_wifi();
+                if success {
+                    println!("Disconnected successfully");
+                } else {
+                    eprintln!("Disconnect failed");
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+            "toggle" => {
+                let enabled = nm_backend::is_wifi_enabled();
+                let success = nm_backend::toggle_wifi_power(!enabled);
+                if success {
+                    println!("Wi-Fi radio toggled {}", if !enabled { "ON" } else { "OFF" });
+                } else {
+                    eprintln!("Failed to toggle Wi-Fi radio");
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+            "rescan" | "scan" => {
+                println!("Triggering Wi-Fi rescan...");
+                nm_backend::trigger_rescan();
+                println!("Rescan triggered");
+                return Ok(());
+            }
+            "waybar-stream" => {
+                let networks = nm_backend::list_networks();
+                let active = networks.iter().find(|n| n.connected);
+                if let Some(net) = active {
+                    println!("{}", json!({
+                        "text": "󰤨",
+                        "tooltip": format!("Wi-Fi: Connected to {}", net.ssid),
+                        "class": "connected"
+                    }));
+                } else {
+                    println!("{}", json!({
+                        "text": "󰤩",
+                        "tooltip": "Wi-Fi: Disconnected",
+                        "class": "disconnected"
+                    }));
+                }
+                return Ok(());
+            }
             "status" => {
                 let networks = nm_backend::list_networks();
                 let vpns = nm_backend::list_vpns();
@@ -174,18 +257,30 @@ async fn main() -> Result<(), slint::PlatformError> {
             "--help" | "-h" | "help" => {
                 println!("Usage: auralink [COMMAND]\n");
                 println!("Commands:");
-                println!("  status      Get current connection status (JSON)");
-                println!("  fullstatus  Get detailed status including available networks (JSON)");
-                println!("  --help      Show this help message");
+                println!("  popup                Open the Wi-Fi GUI interface");
+                println!("  connect <SSID> [PAS] Connect to a Wi-Fi network");
+                println!("  disconnect           Disconnect active Wi-Fi");
+                println!("  toggle               Toggle Wi-Fi radio on/off");
+                println!("  rescan               Trigger a Wi-Fi network scan");
+                println!("  status               Get current connection status (JSON)");
+                println!("  fullstatus           Get detailed status including available networks (JSON)");
+                println!("  waybar-stream        Stream Waybar module output (JSON)");
+                println!("  --help               Show this help message");
                 return Ok(());
             }
             _ => {
                 eprintln!("Error: Unknown command '{}'", cmd);
                 println!("Usage: auralink [COMMAND]\n");
                 println!("Commands:");
-                println!("  status      Get current connection status (JSON)");
-                println!("  fullstatus  Get detailed status including available networks (JSON)");
-                println!("  --help      Show this help message");
+                println!("  popup                Open the Wi-Fi GUI interface");
+                println!("  connect <SSID> [PAS] Connect to a Wi-Fi network");
+                println!("  disconnect           Disconnect active Wi-Fi");
+                println!("  toggle               Toggle Wi-Fi radio on/off");
+                println!("  rescan               Trigger a Wi-Fi network scan");
+                println!("  status               Get current connection status (JSON)");
+                println!("  fullstatus           Get detailed status including available networks (JSON)");
+                println!("  waybar-stream        Stream Waybar module output (JSON)");
+                println!("  --help               Show this help message");
                 std::process::exit(1);
             }
         }
@@ -257,9 +352,9 @@ async fn main() -> Result<(), slint::PlatformError> {
                 }
             });
             if success {
-                send_notification("Wi-Fi", "Disconnected successfully");
+                send_notification("Wi-Fi Disconnected", "Disconnected successfully", Some("network-wireless-disconnected"));
             } else {
-                send_notification("Wi-Fi", "Disconnect failed");
+                send_notification("Wi-Fi Error", "Disconnect failed", Some("dialog-error"));
             }
         });
     });
@@ -277,9 +372,9 @@ async fn main() -> Result<(), slint::PlatformError> {
                 }
             });
             if success {
-                send_notification("Wi-Fi", &format!("Forgot network: {}", ssid));
+                send_notification("Wi-Fi Network", &format!("Forgot network: {}", ssid), Some("user-trash"));
             } else {
-                send_notification("Wi-Fi", &format!("Failed to forget network: {}", ssid));
+                send_notification("Wi-Fi Error", &format!("Failed to forget network: {}", ssid), Some("dialog-error"));
             }
         });
     });
@@ -287,35 +382,46 @@ async fn main() -> Result<(), slint::PlatformError> {
     let window_weak = main_window.as_weak();
     main_window.on_show_network_info(move |ssid| {
         let ssid = ssid.to_string();
-        if let Some(ui) = window_weak.upgrade() {
+        let ww = window_weak.clone();
+        std::thread::spawn(move || {
             let info = nm_backend::get_network_info(&ssid);
-            ui.set_info_content(info.into());
-            ui.set_show_info(true);
-        }
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ww.upgrade() {
+                    ui.set_info_content(info.into());
+                    ui.set_show_info(true);
+                }
+            });
+        });
     });
 
     let window_weak = main_window.as_weak();
     main_window.on_show_network_advanced(move |ssid| {
         let ssid = ssid.to_string();
-        if let Some(ui) = window_weak.upgrade() {
-            if let Some(cfg) = nm_backend::get_network_config(&ssid) {
-                ui.set_active_config_ssid(ssid.into());
-                ui.set_config_autoconnect(cfg.autoconnect);
-                ui.set_config_priority(cfg.priority);
-                ui.set_config_dns(cfg.dns.into());
-                ui.set_config_ipv4_method(cfg.ipv4_method.into());
-                ui.set_config_ipv4_address(cfg.ipv4_address.into());
-                ui.set_config_ipv4_gateway(cfg.ipv4_gateway.into());
-                ui.set_config_ipv6_method(cfg.ipv6_method.into());
-                ui.set_config_ipv6_address(cfg.ipv6_address.into());
-                ui.set_config_ipv6_gateway(cfg.ipv6_gateway.into());
-                ui.set_config_mac_address(cfg.mac_address.into());
-                ui.set_config_password(cfg.password.into());
-                ui.set_show_advanced(true);
-            } else {
-                ui.set_status_msg("Could not load config".into());
-            }
-        }
+        let ww = window_weak.clone();
+        std::thread::spawn(move || {
+            let cfg_opt = nm_backend::get_network_config(&ssid);
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ww.upgrade() {
+                    if let Some(cfg) = cfg_opt {
+                        ui.set_active_config_ssid(ssid.into());
+                        ui.set_config_autoconnect(cfg.autoconnect);
+                        ui.set_config_priority(cfg.priority);
+                        ui.set_config_dns(cfg.dns.into());
+                        ui.set_config_ipv4_method(cfg.ipv4_method.into());
+                        ui.set_config_ipv4_address(cfg.ipv4_address.into());
+                        ui.set_config_ipv4_gateway(cfg.ipv4_gateway.into());
+                        ui.set_config_ipv6_method(cfg.ipv6_method.into());
+                        ui.set_config_ipv6_address(cfg.ipv6_address.into());
+                        ui.set_config_ipv6_gateway(cfg.ipv6_gateway.into());
+                        ui.set_config_mac_address(cfg.mac_address.into());
+                        ui.set_config_password(cfg.password.into());
+                        ui.set_show_advanced(true);
+                    } else {
+                        ui.set_status_msg("Could not load config".into());
+                    }
+                }
+            });
+        });
     });
 
     let window_weak = main_window.as_weak();
@@ -344,9 +450,9 @@ async fn main() -> Result<(), slint::PlatformError> {
                 }
             });
             if success {
-                send_notification("Wi-Fi", &format!("Settings saved for {}", ssid));
+                send_notification("Wi-Fi Configuration", &format!("Settings saved for {}", ssid), Some("network-wireless-encrypted"));
             } else {
-                send_notification("Wi-Fi", &format!("Failed to save settings for {}", ssid));
+                send_notification("Wi-Fi Error", &format!("Failed to save settings for {}", ssid), Some("dialog-error"));
             }
         });
     });
@@ -377,9 +483,9 @@ async fn main() -> Result<(), slint::PlatformError> {
                     }
                 });
                 if success {
-                    send_notification("Wi-Fi", &format!("Connected to {}", ssid));
+                    send_notification("Wi-Fi Connected", &format!("Connected to {}", ssid), Some("network-wireless-connected"));
                 } else {
-                    send_notification("Wi-Fi", &format!("Failed to connect to {}", ssid));
+                    send_notification("Wi-Fi Connection Error", &format!("Failed to connect to {}", ssid), Some("network-wireless-offline"));
                 }
             });
         }
@@ -399,9 +505,9 @@ async fn main() -> Result<(), slint::PlatformError> {
                         ui.set_status_msg(format!("VPN Toggle Failed for {}", name_msg).into());
                     }
                 });
-                send_notification("VPN", &format!("Failed to toggle VPN: {}", name));
+                send_notification("VPN Error", &format!("Failed to toggle VPN: {}", name), Some("dialog-error"));
             } else {
-                send_notification("VPN", &format!("VPN {} toggled {}", name, if active { "on" } else { "off" }));
+                send_notification("VPN Status", &format!("VPN {} toggled {}", name, if active { "ON" } else { "OFF" }), Some("security-high"));
             }
         });
     });
@@ -424,9 +530,9 @@ async fn main() -> Result<(), slint::PlatformError> {
                 }
             });
             if success {
-                send_notification("Airplane Mode", &format!("Airplane Mode: {}", if enabled { "ON" } else { "OFF" }));
+                send_notification("Airplane Mode", &format!("Airplane Mode: {}", if enabled { "ON" } else { "OFF" }), Some("airplane-mode"));
             } else {
-                send_notification("Airplane Mode", "Failed to toggle radios");
+                send_notification("Airplane Mode Error", "Failed to toggle radios", Some("dialog-error"));
             }
         });
     });
