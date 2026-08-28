@@ -14,6 +14,9 @@ optdepends=('bluez-utils: Bluetooth management and auto-connect'
             'libnotify: desktop notifications'
             'python-pywal: live colour scheme sync')
 makedepends=('rust')
+# The release profile already strips, so makepkg's split debug package
+# comes out empty; suppress it rather than publish a 5 KB stub.
+options=('!debug')
 source=("auralink-${pkgver}.tar.gz")
 sha256sums=('SKIP')
 
