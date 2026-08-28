@@ -121,6 +121,29 @@ struct InternalBluetoothDevice {
     audio_profiles: Vec<bt_backend::AudioProfile>,
 }
 
+/// Is the headless auto-connect daemon already running?
+///
+/// The GUI carries its own copy of the auto-connect loop, which predates the
+/// `daemon` subcommand. With both alive, two processes independently page the
+/// same device every 10s and race each other's discovery sessions -- the
+/// duplicate work is invisible when a device is already connected (both loops
+/// short-circuit) but real the moment nothing is.
+///
+/// The loop is kept, not deleted: running `auralink-bt` standalone, with no
+/// systemd unit installed, must still reconnect trusted devices. This is
+/// re-checked every iteration rather than once at startup, so stopping or
+/// starting the unit while the window is open hands the work over either way.
+///
+/// Unlike bluetoothctl, `systemctl is-active` has a meaningful exit status:
+/// 0 active, 3 inactive, 4 no such unit.
+fn autoconnect_daemon_active() -> bool {
+    std::process::Command::new("systemctl")
+        .args(["--user", "is-active", "--quiet", "auralink-bt-daemon.service"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 fn run_daemon() {
     // Poll cadence while nothing is connected. Each tick costs a couple of
     // short-lived helper processes, so it stays modest.
@@ -620,8 +643,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = bt_backend::ensure_switch_on_connect_module();
 
         let mut last_attempt: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
+        // None until the first check, so the first state is always announced.
+        let mut deferring: Option<bool> = None;
 
         loop {
+            // Stand down while the headless daemon owns auto-connect; only the
+            // device-list refresh thread needs to keep running for the UI.
+            let defer = autoconnect_daemon_active();
+            if deferring != Some(defer) {
+                if defer {
+                    eprintln!("Auto-connect deferred to auralink-bt-daemon.service.");
+                } else {
+                    eprintln!("auralink-bt-daemon.service is not running; this window will auto-connect.");
+                }
+                deferring = Some(defer);
+            }
+            if defer {
+                std::thread::sleep(Duration::from_secs(10));
+                continue;
+            }
+
             let connected_address = bt_backend::get_connected_address();
 
             if connected_address.is_some() {
