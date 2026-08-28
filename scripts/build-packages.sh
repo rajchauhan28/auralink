@@ -83,19 +83,18 @@ build_rpm() {
 build_arch() {
     echo "==> Arch package (archlinux:base-devel)"
     # makepkg refuses to run as root, so build as a dedicated unprivileged user.
+    # makepkg verifies that everything in depends= is installed before it
+    # will build, so installing them here doubles as a check that every
+    # dependency name in the PKGBUILD is a real Arch package.
     run_in archlinux:base-devel "
-        pacman -Syu --noconfirm --needed base-devel git curl fontconfig \
-            libxkbcommon wayland libx11 >/dev/null
+        pacman -Syu --noconfirm --needed base-devel git rust \
+            gcc-libs glibc fontconfig freetype2 libpng zlib networkmanager >/dev/null
         useradd -m builder
         cp /src.tar.gz /home/builder/${PKGNAME}-\$VERSION.tar.gz
         tar xzf /src.tar.gz -C /tmp
         cp /tmp/${PKGNAME}-build/PKGBUILD /home/builder/
         chown -R builder:builder /home/builder
-        su builder -c '
-            $RUSTUP
-            cd /home/builder
-            makepkg -f --noconfirm --skipinteg
-        '
+        su builder -c 'cd /home/builder && makepkg -f --noconfirm --skipinteg'
         cp /home/builder/*.pkg.tar.zst /out/
         chmod 644 /out/*.pkg.tar.zst
     "

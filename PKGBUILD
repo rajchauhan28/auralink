@@ -8,12 +8,12 @@ url="https://github.com/rajchauhan28/auralink"
 license=('MIT')
 # Derived from `ldd` on the release binaries. Slint is statically linked, so
 # there is no slint runtime package to depend on.
-depends=('gcc-libs' 'glibc' 'fontconfig' 'freetype2' 'libpng' 'expat' 'bzip2'
-         'brotli' 'zlib-ng-compat' 'networkmanager')
+depends=('gcc-libs' 'glibc' 'fontconfig' 'freetype2' 'libpng' 'zlib'
+         'networkmanager')
 optdepends=('bluez-utils: Bluetooth management and auto-connect'
             'libnotify: desktop notifications'
             'python-pywal: live colour scheme sync')
-makedepends=('cargo')
+makedepends=('rust')
 source=("auralink-${pkgver}.tar.gz")
 sha256sums=('SKIP')
 
@@ -21,7 +21,7 @@ build() {
   cd "$srcdir/auralink-build"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
-  cargo build --release --frozen
+  cargo build --release --locked
 }
 
 package() {

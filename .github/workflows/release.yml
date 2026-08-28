@@ -80,9 +80,10 @@ jobs:
     steps:
       - name: Install build dependencies
         run: |
-          pacman -Syu --noconfirm --needed base-devel git curl rustup \
-            fontconfig libxkbcommon wayland libx11
-          rustup default stable
+          # makepkg refuses to build unless everything in depends= is
+          # installed, so this also validates the PKGBUILD's dependency names.
+          pacman -Syu --noconfirm --needed base-devel git rust \
+            gcc-libs glibc fontconfig freetype2 libpng zlib networkmanager
 
       - uses: actions/checkout@v4
 

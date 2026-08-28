@@ -12,6 +12,17 @@
 /*.tar.gz
 /*.deb
 /*.pkg.tar.zst
+# makepkg staging dir and the extracted AppImage. These were committed by
+# accident and carried ~120 MB of Qt/ICU shared objects and built binaries
+# into every clone and every release source tarball.
+/pkg/
+/squashfs-root/
+# A bare git repository that was committed inside this one.
+/auralink/
+# Throwaway Slint scratch files.
+/test_slint
+/test_slint.rs
+/test.slint
 
 # Editor / System
 .vscode/
