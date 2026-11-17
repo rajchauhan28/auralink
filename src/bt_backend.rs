@@ -417,7 +417,12 @@ pub fn connect(address: &str) -> bool {
 }
 
 pub fn disconnect(address: &str) -> bool {
-    bluetoothctl_ok(bluetoothctl(10, &["disconnect", address]), "Successful disconnected")
+    // BlueZ 5.7x renamed the reply from "Successful disconnected" to
+    // "Disconnection successful". Matching only the old text reported every
+    // working disconnect as a failure; accept either.
+    let out = bluetoothctl(10, &["disconnect", address]);
+    bluetoothctl_ok(out.clone(), "Disconnection successful")
+        || bluetoothctl_ok(out, "Successful disconnected")
 }
 
 pub fn pair(address: &str) -> bool {
