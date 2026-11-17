@@ -72,7 +72,10 @@ Commands:
   --help               Show this help message";
 
 /// The `status` object, shared by `status` and `fullstatus`.
-fn status_json(networks: &[nm_backend::Network], vpns: Vec<nm_backend::VpnConnection>) -> serde_json::Value {
+fn status_json(
+    networks: &[nm_backend::Network],
+    vpns: Vec<nm_backend::VpnConnection>,
+) -> serde_json::Value {
     let active_network = networks.iter().find(|n| n.connected);
     let active_vpns: Vec<_> = vpns.into_iter().filter(|v| v.active).collect();
     let (rx, tx) = nm_backend::get_active_interface()
@@ -92,7 +95,10 @@ fn handle_commands(args: &[String]) -> Option<Result<(), String>> {
     let result = match cmd.as_str() {
         "popup" | "gui" | "open" => return None,
         "quickshell" | "qs" => {
-            let path = format!("{}/.config/quickshell/auralink", std::env::var("HOME").unwrap_or_default());
+            let path = format!(
+                "{}/.config/quickshell/auralink",
+                std::env::var("HOME").unwrap_or_default()
+            );
             std::process::Command::new("quickshell")
                 .args(["-p", &path])
                 .spawn()
@@ -133,13 +139,18 @@ fn handle_commands(args: &[String]) -> Option<Result<(), String>> {
             Ok(())
         }
         "waybar-stream" => {
-            let out = match nm_backend::list_networks(false).iter().find(|n| n.connected) {
+            let out = match nm_backend::list_networks(false)
+                .iter()
+                .find(|n| n.connected)
+            {
                 Some(net) => json!({
                     "text": "󰤨",
                     "tooltip": format!("Wi-Fi: Connected to {}", net.ssid),
                     "class": "connected"
                 }),
-                None => json!({"text": "󰤩", "tooltip": "Wi-Fi: Disconnected", "class": "disconnected"}),
+                None => {
+                    json!({"text": "󰤩", "tooltip": "Wi-Fi: Disconnected", "class": "disconnected"})
+                }
             };
             println!("{}", out);
             Ok(())
@@ -154,7 +165,10 @@ fn handle_commands(args: &[String]) -> Option<Result<(), String>> {
             // Lists available networks, so let nmcli refresh a stale scan.
             let (networks, vpns) = nm_backend::list_networks_and_vpns(true);
             let status = status_json(&networks, vpns);
-            println!("{}", json!({"status": status, "available_networks": networks}));
+            println!(
+                "{}",
+                json!({"status": status, "available_networks": networks})
+            );
             Ok(())
         }
         "--help" | "-h" | "help" => {
@@ -187,7 +201,11 @@ fn network_item(n: nm_backend::Network) -> WifiNetworkItem {
         security: n.security.into(),
         connected: n.connected,
         saved: n.saved,
-        ping: n.ping.map(|p| format!("{} ms", p)).unwrap_or_default().into(),
+        ping: n
+            .ping
+            .map(|p| format!("{} ms", p))
+            .unwrap_or_default()
+            .into(),
         icon: icon.into(),
         icon_color,
         is_ethernet: n.is_ethernet,
@@ -223,13 +241,21 @@ fn main() -> Result<(), slint::PlatformError> {
     let pw = pywal_enabled.clone();
     main_window.on_toggle_pywal(move |enabled| {
         pw.store(enabled, Ordering::Relaxed);
-        AppConfig { pywal_enabled: enabled }.save(CONFIG_FILE);
+        AppConfig {
+            pywal_enabled: enabled,
+        }
+        .save(CONFIG_FILE);
         let theme = if enabled { Theme::from_pywal() } else { None };
-        apply_theme(window_weak.clone(), theme.unwrap_or_else(Theme::default_dark));
+        apply_theme(
+            window_weak.clone(),
+            theme.unwrap_or_else(Theme::default_dark),
+        );
     });
 
     let window_weak = main_window.as_weak();
-    common::spawn_pywal_watch(pywal_enabled, move |theme| apply_theme(window_weak.clone(), theme));
+    common::spawn_pywal_watch(pywal_enabled, move |theme| {
+        apply_theme(window_weak.clone(), theme)
+    });
 
     let window_weak = main_window.as_weak();
     main_window.on_toggle_settings(move || {
@@ -249,11 +275,19 @@ fn main() -> Result<(), slint::PlatformError> {
         std::thread::spawn(move || match nm_backend::disconnect_wifi() {
             Ok(()) => {
                 set_status(&ww, "Disconnected".to_string());
-                notify("Wi-Fi Disconnected", "Disconnected successfully", Some("network-wireless-disconnected"));
+                notify(
+                    "Wi-Fi Disconnected",
+                    "Disconnected successfully",
+                    Some("network-wireless-disconnected"),
+                );
             }
             Err(e) => {
                 set_status(&ww, format!("Disconnect failed: {}", e));
-                notify("Wi-Fi Error", &format!("Disconnect failed: {}", e), Some("dialog-error"));
+                notify(
+                    "Wi-Fi Error",
+                    &format!("Disconnect failed: {}", e),
+                    Some("dialog-error"),
+                );
             }
         });
     });
@@ -265,10 +299,18 @@ fn main() -> Result<(), slint::PlatformError> {
         std::thread::spawn(move || {
             if nm_backend::forget_network(&ssid) {
                 set_status(&ww, format!("Forgot {}", ssid));
-                notify("Wi-Fi Network", &format!("Forgot network: {}", ssid), Some("user-trash"));
+                notify(
+                    "Wi-Fi Network",
+                    &format!("Forgot network: {}", ssid),
+                    Some("user-trash"),
+                );
             } else {
                 set_status(&ww, format!("Failed to forget {}", ssid));
-                notify("Wi-Fi Error", &format!("Failed to forget network: {}", ssid), Some("dialog-error"));
+                notify(
+                    "Wi-Fi Error",
+                    &format!("Failed to forget network: {}", ssid),
+                    Some("dialog-error"),
+                );
             }
         });
     });
@@ -318,32 +360,42 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     let window_weak = main_window.as_weak();
-    main_window.on_save_network_config(move |ssid, auto, prio, dns, i4m, i4a, i4g, i6m, i6a, i6g, mac, pass| {
-        let ssid = ssid.to_string();
-        let config = nm_backend::NetworkConfig {
-            autoconnect: auto,
-            priority: prio,
-            dns: dns.to_string(),
-            ipv4_method: i4m.to_string(),
-            ipv4_address: i4a.to_string(),
-            ipv4_gateway: i4g.to_string(),
-            ipv6_method: i6m.to_string(),
-            ipv6_address: i6a.to_string(),
-            ipv6_gateway: i6g.to_string(),
-            mac_address: mac.to_string(),
-            password: pass.to_string(),
-        };
-        let ww = window_weak.clone();
-        std::thread::spawn(move || {
-            if nm_backend::update_network_config(&ssid, config) {
-                set_status(&ww, "Settings saved".to_string());
-                notify("Wi-Fi Configuration", &format!("Settings saved for {}", ssid), Some("network-wireless-encrypted"));
-            } else {
-                set_status(&ww, "Save failed".to_string());
-                notify("Wi-Fi Error", &format!("Failed to save settings for {}", ssid), Some("dialog-error"));
-            }
-        });
-    });
+    main_window.on_save_network_config(
+        move |ssid, auto, prio, dns, i4m, i4a, i4g, i6m, i6a, i6g, mac, pass| {
+            let ssid = ssid.to_string();
+            let config = nm_backend::NetworkConfig {
+                autoconnect: auto,
+                priority: prio,
+                dns: dns.to_string(),
+                ipv4_method: i4m.to_string(),
+                ipv4_address: i4a.to_string(),
+                ipv4_gateway: i4g.to_string(),
+                ipv6_method: i6m.to_string(),
+                ipv6_address: i6a.to_string(),
+                ipv6_gateway: i6g.to_string(),
+                mac_address: mac.to_string(),
+                password: pass.to_string(),
+            };
+            let ww = window_weak.clone();
+            std::thread::spawn(move || {
+                if nm_backend::update_network_config(&ssid, config) {
+                    set_status(&ww, "Settings saved".to_string());
+                    notify(
+                        "Wi-Fi Configuration",
+                        &format!("Settings saved for {}", ssid),
+                        Some("network-wireless-encrypted"),
+                    );
+                } else {
+                    set_status(&ww, "Save failed".to_string());
+                    notify(
+                        "Wi-Fi Error",
+                        &format!("Failed to save settings for {}", ssid),
+                        Some("dialog-error"),
+                    );
+                }
+            });
+        },
+    );
 
     let window_weak = main_window.as_weak();
     main_window.on_expand_network(move |ssid| {
@@ -356,14 +408,20 @@ fn main() -> Result<(), slint::PlatformError> {
     main_window.on_connect(move |ssid, pass| {
         let ssid = ssid.to_string();
         let password = (!pass.is_empty()).then(|| pass.to_string());
-        let Some(ui) = window_weak.upgrade() else { return };
+        let Some(ui) = window_weak.upgrade() else {
+            return;
+        };
         ui.set_is_connecting(true);
         ui.set_status_msg(format!("Connecting to {}...", ssid).into());
 
         let ww = window_weak.clone();
         std::thread::spawn(move || {
             let success = nm_backend::connect_to_wifi(&ssid, password.as_deref());
-            let msg = if success { format!("Connected to {}", ssid) } else { "Failed!".to_string() };
+            let msg = if success {
+                format!("Connected to {}", ssid)
+            } else {
+                "Failed!".to_string()
+            };
             let handle = ww.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = handle.upgrade() {
@@ -372,9 +430,17 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
             });
             if success {
-                notify("Wi-Fi Connected", &format!("Connected to {}", ssid), Some("network-wireless-connected"));
+                notify(
+                    "Wi-Fi Connected",
+                    &format!("Connected to {}", ssid),
+                    Some("network-wireless-connected"),
+                );
             } else {
-                notify("Wi-Fi Connection Error", &format!("Failed to connect to {}", ssid), Some("network-wireless-offline"));
+                notify(
+                    "Wi-Fi Connection Error",
+                    &format!("Failed to connect to {}", ssid),
+                    Some("network-wireless-offline"),
+                );
             }
         });
     });
@@ -386,10 +452,18 @@ fn main() -> Result<(), slint::PlatformError> {
         let ww = window_weak.clone();
         std::thread::spawn(move || {
             if nm_backend::toggle_vpn(&name, &vtype, active) {
-                notify("VPN Status", &format!("VPN {} toggled {}", name, if active { "ON" } else { "OFF" }), Some("security-high"));
+                notify(
+                    "VPN Status",
+                    &format!("VPN {} toggled {}", name, if active { "ON" } else { "OFF" }),
+                    Some("security-high"),
+                );
             } else {
                 set_status(&ww, format!("VPN Toggle Failed for {}", name));
-                notify("VPN Error", &format!("Failed to toggle VPN: {}", name), Some("dialog-error"));
+                notify(
+                    "VPN Error",
+                    &format!("Failed to toggle VPN: {}", name),
+                    Some("dialog-error"),
+                );
             }
         });
     });
@@ -406,7 +480,11 @@ fn main() -> Result<(), slint::PlatformError> {
             // airplane mode as success.
             if wifi_ok && bt_ok {
                 set_status(&ww, format!("Airplane Mode: {}", state));
-                notify("Airplane Mode", &format!("Airplane Mode: {}", state), Some("airplane-mode"));
+                notify(
+                    "Airplane Mode",
+                    &format!("Airplane Mode: {}", state),
+                    Some("airplane-mode"),
+                );
             } else {
                 let failed = match (wifi_ok, bt_ok) {
                     (false, false) => "Wi-Fi and Bluetooth",
@@ -414,19 +492,29 @@ fn main() -> Result<(), slint::PlatformError> {
                     _ => "Bluetooth",
                 };
                 set_status(&ww, format!("Airplane Mode: could not switch {}", failed));
-                notify("Airplane Mode Error", &format!("Could not switch {} radio", failed), Some("dialog-error"));
+                notify(
+                    "Airplane Mode Error",
+                    &format!("Could not switch {} radio", failed),
+                    Some("dialog-error"),
+                );
             }
         });
     });
 
     let window_weak = main_window.as_weak();
     main_window.on_import_vpn(move || {
-        if let Some(file) = FileDialog::new().add_filter("VPN Config", &["conf", "ovpn"]).pick_file() {
+        if let Some(file) = FileDialog::new()
+            .add_filter("VPN Config", &["conf", "ovpn"])
+            .pick_file()
+        {
             let path = file.display().to_string();
             let ww = window_weak.clone();
             std::thread::spawn(move || {
                 let ok = nm_backend::import_vpn(&path);
-                set_status(&ww, if ok { "VPN Imported" } else { "Import Failed" }.to_string());
+                set_status(
+                    &ww,
+                    if ok { "VPN Imported" } else { "Import Failed" }.to_string(),
+                );
             });
         }
     });
@@ -455,10 +543,15 @@ fn main() -> Result<(), slint::PlatformError> {
             let ww = window_weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ww.upgrade() {
-                    let items: Vec<WifiNetworkItem> = networks.into_iter().map(network_item).collect();
+                    let items: Vec<WifiNetworkItem> =
+                        networks.into_iter().map(network_item).collect();
                     let vpn_items: Vec<WifiVpnItem> = vpns
                         .into_iter()
-                        .map(|v| WifiVpnItem { name: v.name.into(), active: v.active, type_name: v.vpn_type.into() })
+                        .map(|v| WifiVpnItem {
+                            name: v.name.into(),
+                            active: v.active,
+                            type_name: v.vpn_type.into(),
+                        })
                         .collect();
                     ui.set_networks(ModelRc::new(VecModel::from(items)));
                     ui.set_vpns(ModelRc::new(VecModel::from(vpn_items)));
@@ -500,7 +593,9 @@ fn main() -> Result<(), slint::PlatformError> {
             {
                 let now = Instant::now();
                 match last_stats {
-                    Some((l_rx, l_tx, l_time)) if now.duration_since(l_time).as_secs_f64() > 0.1 => {
+                    Some((l_rx, l_tx, l_time))
+                        if now.duration_since(l_time).as_secs_f64() > 0.1 =>
+                    {
                         let secs = now.duration_since(l_time).as_secs_f64();
                         // saturating: counters reset when an interface is
                         // re-created, which is not negative traffic.
@@ -511,11 +606,17 @@ fn main() -> Result<(), slint::PlatformError> {
                         download_history.push_back(rx_speed as f32);
                         upload_history.pop_front();
                         upload_history.push_back(tx_speed as f32);
-                        let max = download_history.iter().chain(&upload_history).fold(1.0f32, |a, &b| a.max(b));
+                        let max = download_history
+                            .iter()
+                            .chain(&upload_history)
+                            .fold(1.0f32, |a, &b| a.max(b));
 
                         let dl: Vec<f32> = download_history.iter().copied().collect();
                         let ul: Vec<f32> = upload_history.iter().copied().collect();
-                        let (dl_str, ul_str) = (common::format_speed(rx_speed), common::format_speed(tx_speed));
+                        let (dl_str, ul_str) = (
+                            common::format_speed(rx_speed),
+                            common::format_speed(tx_speed),
+                        );
                         let ww = window_weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(ui) = ww.upgrade() {
@@ -551,9 +652,18 @@ mod tests {
     fn cli_dispatch() {
         assert!(handle_commands(&args(&["auralink"])).is_none());
         assert!(handle_commands(&args(&["auralink", "popup"])).is_none());
-        assert!(matches!(handle_commands(&args(&["auralink", "--help"])), Some(Ok(()))));
-        assert!(matches!(handle_commands(&args(&["auralink", "bogus"])), Some(Err(_))));
+        assert!(matches!(
+            handle_commands(&args(&["auralink", "--help"])),
+            Some(Ok(()))
+        ));
+        assert!(matches!(
+            handle_commands(&args(&["auralink", "bogus"])),
+            Some(Err(_))
+        ));
         // Missing SSID is a usage error, and nothing is touched.
-        assert!(matches!(handle_commands(&args(&["auralink", "connect"])), Some(Err(_))));
+        assert!(matches!(
+            handle_commands(&args(&["auralink", "connect"])),
+            Some(Err(_))
+        ));
     }
 }

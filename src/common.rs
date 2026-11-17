@@ -188,8 +188,14 @@ mod tests {
 
     #[test]
     fn parse_hex_handles_rgb_rgba_and_garbage() {
-        assert_eq!(parse_hex("#102030"), Some(Color::from_rgb_u8(0x10, 0x20, 0x30)));
-        assert_eq!(parse_hex("10203040"), Some(Color::from_argb_u8(0x40, 0x10, 0x20, 0x30)));
+        assert_eq!(
+            parse_hex("#102030"),
+            Some(Color::from_rgb_u8(0x10, 0x20, 0x30))
+        );
+        assert_eq!(
+            parse_hex("10203040"),
+            Some(Color::from_argb_u8(0x40, 0x10, 0x20, 0x30))
+        );
         assert_eq!(parse_hex("#12345"), None);
         assert_eq!(parse_hex("#zz2030"), None);
         // Multi-byte input must not panic on a non-char-boundary slice.

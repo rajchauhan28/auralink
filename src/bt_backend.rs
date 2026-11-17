@@ -125,14 +125,21 @@ impl Snapshot {
     /// `{"type": ..., "data": [{path: {iface: {prop: {"type", "data"}}}}]}`.
     fn from_managed_objects(json: &Value) -> Snapshot {
         let mut snap = Snapshot::default();
-        let Some(objects) = json.get("data").and_then(|d| d.get(0)).and_then(Value::as_object) else {
+        let Some(objects) = json
+            .get("data")
+            .and_then(|d| d.get(0))
+            .and_then(Value::as_object)
+        else {
             return snap;
         };
 
         let mut batteries: Vec<(&str, i32)> = Vec::new();
         for (path, ifaces) in objects {
             if let Some(a) = ifaces.get(ADAPTER_IFACE) {
-                snap.adapters.push(Adapter { path: path.clone(), powered: prop_bool(a, "Powered") });
+                snap.adapters.push(Adapter {
+                    path: path.clone(),
+                    powered: prop_bool(a, "Powered"),
+                });
             }
             if let Some(b) = ifaces.get(BATTERY_IFACE)
                 && let Some(pct) = prop(b, "Percentage").and_then(Value::as_i64)
@@ -150,7 +157,9 @@ impl Snapshot {
                     .map(|a| a.iter().filter_map(Value::as_str).collect())
                     .unwrap_or_default();
                 let is_audio = icon.starts_with("audio-")
-                    || uuids.iter().any(|u| AUDIO_UUIDS.contains(&u.to_ascii_lowercase().as_str()));
+                    || uuids
+                        .iter()
+                        .any(|u| AUDIO_UUIDS.contains(&u.to_ascii_lowercase().as_str()));
                 // Alias is what bluetoothctl and desktop applets show: the
                 // user's rename if any, else the advertised name.
                 let mut name = prop_str(d, "Alias");
@@ -184,11 +193,16 @@ impl Snapshot {
             let child_prefix = format!("{}/", dev.path);
             for (path, pct) in &batteries {
                 if *path == dev.path || path.starts_with(&child_prefix) {
-                    dev.batteries.push(Battery { label: battery_label(path, &dev_id), percentage: *pct });
+                    dev.batteries.push(Battery {
+                        label: battery_label(path, &dev_id),
+                        percentage: *pct,
+                    });
                 }
             }
             // Whole-device battery first, then components alphabetically.
-            dev.batteries.sort_by(|a, b| (!a.label.is_empty(), &a.label).cmp(&(!b.label.is_empty(), &b.label)));
+            dev.batteries.sort_by(|a, b| {
+                (!a.label.is_empty(), &a.label).cmp(&(!b.label.is_empty(), &b.label))
+            });
             dev.battery = dev.batteries.iter().map(|b| b.percentage).min();
         }
 
@@ -206,7 +220,9 @@ impl Snapshot {
     }
 
     pub fn device(&self, address: &str) -> Option<&BluetoothDevice> {
-        self.devices.iter().find(|d| d.address.eq_ignore_ascii_case(address))
+        self.devices
+            .iter()
+            .find(|d| d.address.eq_ignore_ascii_case(address))
     }
 
     pub fn connected(&self) -> impl Iterator<Item = &BluetoothDevice> {
@@ -247,12 +263,18 @@ fn prop_bool(iface: &Value, name: &str) -> bool {
 }
 
 fn prop_str(iface: &Value, name: &str) -> String {
-    prop(iface, name).and_then(Value::as_str).unwrap_or_default().to_string()
+    prop(iface, name)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 pub fn is_valid_mac(addr: &str) -> bool {
     let parts: Vec<&str> = addr.split(':').collect();
-    parts.len() == 6 && parts.iter().all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit()))
+    parts.len() == 6
+        && parts
+            .iter()
+            .all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
 /// Derive a human-readable label from a battery object path. The whole-device
@@ -288,7 +310,12 @@ pub fn list_devices() -> Vec<BluetoothDevice> {
 }
 
 pub fn list_connected_devices() -> Vec<BluetoothDevice> {
-    Snapshot::read().with_audio_profiles().devices.into_iter().filter(|d| d.connected).collect()
+    Snapshot::read()
+        .with_audio_profiles()
+        .devices
+        .into_iter()
+        .filter(|d| d.connected)
+        .collect()
 }
 
 pub fn is_powered() -> bool {
@@ -323,7 +350,10 @@ fn busctl(timeout_secs: u32, verb: &str, args: &[&str]) -> Result<(), String> {
 /// Resolve a MAC address to its BlueZ device, on whichever adapter has it.
 fn find_device(address: &str) -> Result<BluetoothDevice, String> {
     if !is_valid_mac(address) {
-        return Err(format!("'{}' is not a Bluetooth address (expected AA:BB:CC:DD:EE:FF)", address));
+        return Err(format!(
+            "'{}' is not a Bluetooth address (expected AA:BB:CC:DD:EE:FF)",
+            address
+        ));
     }
     Snapshot::read()
         .device(address)
@@ -345,13 +375,27 @@ pub fn disconnect(address: &str) -> Result<(), String> {
 
 pub fn trust(address: &str, enable: bool) -> Result<(), String> {
     let dev = find_device(address)?;
-    busctl(5, "set-property", &[&dev.path, DEVICE_IFACE, "Trusted", "b", if enable { "true" } else { "false" }])
+    busctl(
+        5,
+        "set-property",
+        &[
+            &dev.path,
+            DEVICE_IFACE,
+            "Trusted",
+            "b",
+            if enable { "true" } else { "false" },
+        ],
+    )
 }
 
 /// Unpair and forget the device.
 pub fn remove(address: &str) -> Result<(), String> {
     let dev = find_device(address)?;
-    busctl(10, "call", &[&dev.adapter, ADAPTER_IFACE, "RemoveDevice", "o", &dev.path])
+    busctl(
+        10,
+        "call",
+        &[&dev.adapter, ADAPTER_IFACE, "RemoveDevice", "o", &dev.path],
+    )
 }
 
 /// Power every adapter on or off.
@@ -364,9 +408,20 @@ pub fn set_power(enable: bool) -> Result<(), String> {
     let errors: Vec<String> = snap
         .adapters
         .iter()
-        .filter_map(|a| busctl(5, "set-property", &[&a.path, ADAPTER_IFACE, "Powered", "b", value]).err())
+        .filter_map(|a| {
+            busctl(
+                5,
+                "set-property",
+                &[&a.path, ADAPTER_IFACE, "Powered", "b", value],
+            )
+            .err()
+        })
         .collect();
-    if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 /// Pair through bluetoothctl, whose session registers the agent that answers
@@ -384,7 +439,9 @@ pub fn pair(address: &str) -> Result<(), String> {
         Some(text) => Err(text
             .lines()
             .rev()
-            .find(|l| l.contains("Failed") || l.contains("not available") || l.contains("org.bluez.Error"))
+            .find(|l| {
+                l.contains("Failed") || l.contains("not available") || l.contains("org.bluez.Error")
+            })
             .unwrap_or("pairing did not complete")
             .trim()
             .to_string()),
@@ -397,7 +454,12 @@ pub fn pair(address: &str) -> Result<(), String> {
 /// This replaces `bluetoothctl --timeout`, which makes bluetoothctl wait out
 /// the whole timeout even after the command has finished.
 fn output_within(mut cmd: Command, limit: Duration) -> Option<String> {
-    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok()?;
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
     // Drain both pipes on their own threads so a chatty child cannot block
     // on a full pipe while we wait for it.
     let drain = |pipe: Option<Box<dyn Read + Send>>| {
@@ -409,8 +471,18 @@ fn output_within(mut cmd: Command, limit: Duration) -> Option<String> {
             buf
         })
     };
-    let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let err = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let out = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let err = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
 
     let deadline = Instant::now() + limit;
     loop {
@@ -468,7 +540,9 @@ pub fn start_scan() -> bool {
 
 /// True while a discovery session this process started is still alive.
 pub fn scan_running() -> bool {
-    let Ok(mut slot) = SCAN_CHILD.lock() else { return false };
+    let Ok(mut slot) = SCAN_CHILD.lock() else {
+        return false;
+    };
     match slot.as_mut() {
         // try_wait reaps it the moment it exits, so the session ending does
         // not leave a zombie behind either.
@@ -525,7 +599,9 @@ fn pa_cards() -> Vec<PaCard> {
 }
 
 fn parse_pa_cards(json: &Value) -> Vec<PaCard> {
-    let Some(cards) = json.as_array() else { return Vec::new() };
+    let Some(cards) = json.as_array() else {
+        return Vec::new();
+    };
     cards
         .iter()
         .filter_map(|c| {
@@ -535,15 +611,27 @@ fn parse_pa_cards(json: &Value) -> Vec<PaCard> {
                 .iter()
                 .map(|(name, p)| PaProfile {
                     name: name.clone(),
-                    description: p.get("description").and_then(Value::as_str).unwrap_or_default().to_string(),
+                    description: p
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
                     priority: p.get("priority").and_then(Value::as_i64).unwrap_or(0),
                     available: p.get("available").and_then(Value::as_bool).unwrap_or(true),
                 })
                 .collect();
-            profiles.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.name.cmp(&b.name)));
+            profiles.sort_by(|a, b| {
+                b.priority
+                    .cmp(&a.priority)
+                    .then_with(|| a.name.cmp(&b.name))
+            });
             Some(PaCard {
                 name: c.get("name")?.as_str()?.to_string(),
-                active_profile: c.get("active_profile").and_then(Value::as_str).unwrap_or_default().to_string(),
+                active_profile: c
+                    .get("active_profile")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
                 profiles,
             })
         })
@@ -553,9 +641,9 @@ fn parse_pa_cards(json: &Value) -> Vec<PaCard> {
 /// The `bluez_card.AA_BB_...` card for a device.
 fn find_card<'a>(cards: &'a [PaCard], address: &str) -> Option<&'a PaCard> {
     let suffix = address.replace(':', "_").to_ascii_uppercase();
-    cards
-        .iter()
-        .find(|c| c.name.starts_with("bluez_card.") && c.name.to_ascii_uppercase().ends_with(&suffix))
+    cards.iter().find(|c| {
+        c.name.starts_with("bluez_card.") && c.name.to_ascii_uppercase().ends_with(&suffix)
+    })
 }
 
 fn set_card_profile(card: &str, profile: &str) -> bool {
@@ -575,10 +663,16 @@ pub fn set_audio_profile(address: &str, profile_name: &str) -> bool {
 /// Headsets often come up on HSP/HFP (phone-call quality) instead.
 pub fn force_a2dp_profile(address: &str) -> bool {
     let cards = pa_cards();
-    let Some(card) = find_card(&cards, address) else { return false };
+    let Some(card) = find_card(&cards, address) else {
+        return false;
+    };
     // Profiles are sorted best-first, so the first available A2DP sink wins
     // (e.g. AAC "a2dp-sink" at 133 over "a2dp-sink-sbc" at 132).
-    let Some(best) = card.profiles.iter().find(|p| p.available && p.name.starts_with("a2dp-sink")) else {
+    let Some(best) = card
+        .profiles
+        .iter()
+        .find(|p| p.available && p.name.starts_with("a2dp-sink"))
+    else {
         return false;
     };
     card.active_profile == best.name || set_card_profile(&card.name, &best.name)
@@ -648,7 +742,10 @@ mod tests {
     fn classifies_audio_devices() {
         let s = snapshot();
         assert!(!s.device("CA:78:43:91:63:97").unwrap().is_audio, "mouse");
-        assert!(s.device("28:04:C6:A8:22:FE").unwrap().is_audio, "audio-* icon");
+        assert!(
+            s.device("28:04:C6:A8:22:FE").unwrap().is_audio,
+            "audio-* icon"
+        );
         // No icon, but an (upper-case) A2DP sink UUID.
         assert!(s.device("88:0e:85:91:af:f2").unwrap().is_audio, "A2DP UUID");
     }
@@ -689,8 +786,15 @@ mod tests {
         ]);
         let cards = parse_pa_cards(&json);
         let card = find_card(&cards, "28:04:c6:a8:22:fe").expect("case-insensitive card match");
-        let best = card.profiles.iter().find(|p| p.available && p.name.starts_with("a2dp-sink")).unwrap();
-        assert_eq!(best.name, "a2dp-sink", "unavailable LDAC skipped, AAC beats SBC");
+        let best = card
+            .profiles
+            .iter()
+            .find(|p| p.available && p.name.starts_with("a2dp-sink"))
+            .unwrap();
+        assert_eq!(
+            best.name, "a2dp-sink",
+            "unavailable LDAC skipped, AAC beats SBC"
+        );
         assert!(find_card(&cards, "00:00:00:00:00:00").is_none());
     }
 
@@ -709,12 +813,18 @@ mod tests {
         quick.args(["-c", "echo hi; echo err >&2"]);
         let text = output_within(quick, Duration::from_secs(10)).unwrap();
         assert!(text.contains("hi") && text.contains("err"));
-        assert!(start.elapsed() < Duration::from_secs(5), "must not wait out the limit");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "must not wait out the limit"
+        );
 
         let start = Instant::now();
         let mut slow = Command::new("sleep");
         slow.arg("30");
         output_within(slow, Duration::from_millis(300)).unwrap();
-        assert!(start.elapsed() < Duration::from_secs(5), "must kill at the deadline");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "must kill at the deadline"
+        );
     }
 }

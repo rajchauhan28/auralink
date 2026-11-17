@@ -45,13 +45,20 @@ struct Markers(PathBuf);
 
 impl Markers {
     fn open() -> Option<Markers> {
-        let base = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).or_else(|| {
-            // Not set outside a login session; fall back to the standard path.
-            let status = std::fs::read_to_string("/proc/self/status").ok()?;
-            let uid = status.lines().find_map(|l| l.strip_prefix("Uid:"))?.split_whitespace().next()?.to_string();
-            let dir = PathBuf::from(format!("/run/user/{}", uid));
-            dir.is_dir().then_some(dir)
-        })?;
+        let base = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .or_else(|| {
+                // Not set outside a login session; fall back to the standard path.
+                let status = std::fs::read_to_string("/proc/self/status").ok()?;
+                let uid = status
+                    .lines()
+                    .find_map(|l| l.strip_prefix("Uid:"))?
+                    .split_whitespace()
+                    .next()?
+                    .to_string();
+                let dir = PathBuf::from(format!("/run/user/{}", uid));
+                dir.is_dir().then_some(dir)
+            })?;
         Some(Markers(base.join("auralink").join("bt-manual-disconnect")))
     }
 
@@ -198,7 +205,11 @@ impl AutoConnector {
 
         let now = Instant::now();
         for dev in candidates {
-            if self.last_attempt.get(&dev.address).is_some_and(|t| now.duration_since(*t) < RETRY_COOLDOWN) {
+            if self
+                .last_attempt
+                .get(&dev.address)
+                .is_some_and(|t| now.duration_since(*t) < RETRY_COOLDOWN)
+            {
                 continue;
             }
             // Each attempt can take seconds: re-check that nothing connected
@@ -255,7 +266,12 @@ pub fn run_daemon() -> ! {
 /// `systemctl is-active` exits 0 active, 3 inactive, 4 no such unit.
 pub fn daemon_active() -> bool {
     std::process::Command::new("systemctl")
-        .args(["--user", "is-active", "--quiet", "auralink-bt-daemon.service"])
+        .args([
+            "--user",
+            "is-active",
+            "--quiet",
+            "auralink-bt-daemon.service",
+        ])
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
