@@ -1,442 +1,213 @@
+mod autoconnect;
 mod bt_backend;
+mod common;
 
-use slint::{VecModel, Color, ModelRc, ComponentHandle};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use common::{AppConfig, Theme};
+use slint::{Color, ComponentHandle, ModelRc, VecModel};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 mod ui {
     include!(concat!(env!("OUT_DIR"), "/bluetooth.rs"));
 }
 use ui::*;
 
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-struct AppConfig {
-    pywal_enabled: bool,
+const CONFIG_FILE: &str = "bt_config.json";
+
+fn notify(summary: &str, body: &str, icon: Option<&str>) {
+    common::send_notification("AuraLink BT", summary, body, icon);
 }
 
-impl AppConfig {
-    fn load() -> Self {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let path = format!("{}/.config/auralink/bt_config.json", home);
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<AppConfig>(&s).ok())
-            .unwrap_or(AppConfig { 
-                pywal_enabled: false,
-            })
-    }
+fn set_palette(ui: &AppWindow, t: &Theme) {
+    let p = ui.global::<Palette>();
+    p.set_background(t.background);
+    p.set_card_bg(t.card_bg);
+    p.set_accent(t.accent);
+    p.set_foreground(t.foreground);
+    p.set_secondary_fg(t.secondary_fg);
+    p.set_separator(t.separator);
+}
 
-    fn save(&self) {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let dir = format!("{}/.config/auralink", home);
-        let path = format!("{}/bt_config.json", dir);
-        let _ = std::fs::create_dir_all(dir);
-        if let Ok(s) = serde_json::to_string(self) {
-            let _ = std::fs::write(path, s);
+/// Hop to the UI thread and apply a theme.
+fn apply_theme(handle: slint::Weak<AppWindow>, theme: Theme) {
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(ui) = handle.upgrade() {
+            set_palette(&ui, &theme);
         }
-    }
+    });
 }
 
-fn send_notification(summary: &str, body: &str, icon: Option<&str>) {
-    let mut cmd = std::process::Command::new("notify-send");
-    cmd.args([
-        "-a", "AuraLink BT",
-        "-t", "3500",
-        "-u", "normal",
-        summary,
-        body,
-    ]);
-    if let Some(ic) = icon {
-        cmd.args(["-i", ic]);
-    }
-    let _ = cmd.spawn();
+/// Hop to the UI thread and set the status line.
+fn set_status(handle: &slint::Weak<AppWindow>, msg: String) {
+    let handle = handle.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(ui) = handle.upgrade() {
+            ui.set_status_msg(msg.into());
+        }
+    });
 }
 
-#[derive(serde::Deserialize, Debug)]
-struct PywalColors {
-    colors: std::collections::HashMap<String, String>,
-    special: std::collections::HashMap<String, String>,
-}
-
-fn parse_hex(hex: &str) -> Option<Color> {
-    let hex = hex.trim_start_matches('#');
-    if hex.len() == 6 {
-        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-        Some(Color::from_rgb_u8(r, g, b))
-    } else if hex.len() == 8 {
-        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-        let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
-        Some(Color::from_argb_u8(a, r, g, b))
+fn to_slint(d: bt_backend::BluetoothDevice) -> BluetoothDevice {
+    let (icon, icon_color) = if d.connected {
+        ("󰂱", Color::from_rgb_u8(0, 240, 255))
+    } else if d.paired {
+        ("󰂲", Color::from_rgb_u8(245, 194, 17))
     } else {
-        None
+        ("󰂯", Color::from_rgb_u8(161, 161, 170))
+    };
+    let profiles: Vec<AudioProfile> = d
+        .audio_profiles
+        .into_iter()
+        .map(|p| AudioProfile { name: p.name.into(), description: p.description.into(), active: p.active, available: p.available })
+        .collect();
+    let batteries: Vec<BatteryInfo> =
+        d.batteries.into_iter().map(|b| BatteryInfo { label: b.label.into(), percentage: b.percentage }).collect();
+    BluetoothDevice {
+        name: d.name.into(),
+        address: d.address.into(),
+        connected: d.connected,
+        paired: d.paired,
+        trusted: d.trusted,
+        rssi: d.rssi,
+        battery: d.battery.unwrap_or(0),
+        batteries: ModelRc::new(VecModel::from(batteries)),
+        icon: icon.into(),
+        icon_color,
+        audio_profiles: ModelRc::new(VecModel::from(profiles)),
     }
 }
 
-fn apply_pywal_theme(handle: slint::Weak<AppWindow>) {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let path = format!("{}/.cache/wal/colors.json", home);
-    
-    if let Ok(content) = std::fs::read_to_string(path)
-        && let Ok(wal) = serde_json::from_str::<PywalColors>(&content) {
-            let mut bg = parse_hex(wal.special.get("background").unwrap_or(&"#09090b".to_string())).unwrap_or(Color::from_rgb_u8(9, 9, 11));
-            bg = Color::from_argb_u8(136, bg.red(), bg.green(), bg.blue());
-            
-            let fg = parse_hex(wal.special.get("foreground").unwrap_or(&"#f8fafc".to_string())).unwrap_or(Color::from_rgb_u8(248, 250, 252));
-            let accent = parse_hex(wal.colors.get("color1").unwrap_or(&"#00f0ff".to_string())).unwrap_or(Color::from_rgb_u8(0, 240, 255));
-            
-            let card_bg = Color::from_argb_u8(255, 
-                (bg.red() as i16 + 15).clamp(0, 255) as u8,
-                (bg.green() as i16 + 15).clamp(0, 255) as u8,
-                (bg.blue() as i16 + 15).clamp(0, 255) as u8
-            );
+const USAGE: &str = "\
+Usage: auralink-bt [COMMAND]
 
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(ui) = handle.upgrade() {
-                    let palette = ui.global::<Palette>();
-                    palette.set_background(bg);
-                    palette.set_foreground(fg);
-                    palette.set_accent(accent);
-                    palette.set_card_bg(card_bg);
-                    palette.set_secondary_fg(Color::from_argb_u8(180, fg.red(), fg.green(), fg.blue()));
-                    palette.set_separator(Color::from_argb_u8(60, fg.red(), fg.green(), fg.blue()));
-                }
-            });
-        }
+Commands:
+  popup            Open the Bluetooth GUI interface
+  connect <MAC>    Connect to a Bluetooth device
+  disconnect <MAC> Disconnect a device (auto-connect leaves it alone until you reconnect it)
+  pair <MAC>       Pair with a Bluetooth device
+  trust <MAC>      Trust a Bluetooth device
+  remove <MAC>     Remove/unpair a Bluetooth device
+  toggle           Toggle Bluetooth adapter power
+  daemon           Run auto-connect background daemon (headless, no GUI)
+  status           Get current connection status (JSON)
+  fullstatus       Get detailed status including available devices (JSON)
+  waybar-stream    Print a Waybar module status line (JSON)
+  --help           Show this help message";
+
+/// Run a device action from the CLI, printing progress and the outcome.
+fn run_action(
+    args: &[String],
+    verb: &str,
+    doing: &str,
+    done: &str,
+    action: fn(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    let mac = args.get(2).ok_or_else(|| format!("Usage: auralink-bt {} <MAC_ADDRESS>", verb))?;
+    println!("{} {}...", doing, mac);
+    action(mac).map_err(|e| format!("Failed to {} {}: {}", verb, mac, e))?;
+    println!("{} {}", done, mac);
+    Ok(())
 }
 
-// Intermediate struct that IS Send
-struct InternalBluetoothDevice {
-    name: String,
-    address: String,
-    connected: bool,
-    paired: bool,
-    trusted: bool,
-    rssi: i32,
-    battery: Option<i32>,
-    batteries: Vec<bt_backend::Battery>,
-    audio_profiles: Vec<bt_backend::AudioProfile>,
-}
-
-/// Is the headless auto-connect daemon already running?
-///
-/// The GUI carries its own copy of the auto-connect loop, which predates the
-/// `daemon` subcommand. With both alive, two processes independently page the
-/// same device every 10s and race each other's discovery sessions -- the
-/// duplicate work is invisible when a device is already connected (both loops
-/// short-circuit) but real the moment nothing is.
-///
-/// The loop is kept, not deleted: running `auralink-bt` standalone, with no
-/// systemd unit installed, must still reconnect trusted devices. This is
-/// re-checked every iteration rather than once at startup, so stopping or
-/// starting the unit while the window is open hands the work over either way.
-///
-/// Unlike bluetoothctl, `systemctl is-active` has a meaningful exit status:
-/// 0 active, 3 inactive, 4 no such unit.
-fn autoconnect_daemon_active() -> bool {
-    std::process::Command::new("systemctl")
-        .args(["--user", "is-active", "--quiet", "auralink-bt-daemon.service"])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-fn run_daemon() {
-    // Poll cadence while nothing is connected. Each tick costs a couple of
-    // short-lived helper processes, so it stays modest.
-    const IDLE_POLL: Duration = Duration::from_secs(8);
-    // Cadence once something IS connected; nothing to do but notice a drop.
-    const CONNECTED_POLL: Duration = Duration::from_secs(15);
-    // Per-device backoff so a device that is simply switched off is not
-    // hammered every tick.
-    const RETRY_COOLDOWN: Duration = Duration::from_secs(30);
-
-    eprintln!("=== AuraLink Bluetooth Auto-Connect Daemon Started ===");
-    let _ = bt_backend::ensure_switch_on_connect_module();
-
-    let mut last_attempt: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
-
-    loop {
-        if let Some(connected) = bt_backend::get_connected_address() {
-            // Discovery competes with A2DP for the radio and audibly stutters
-            // playback, so it must not run while a headset is streaming.
-            if bt_backend::scan_running() {
-                eprintln!("Daemon: {} connected; stopping discovery.", connected);
-                bt_backend::stop_scan();
-            }
-            last_attempt.clear();
-            std::thread::sleep(CONNECTED_POLL);
-            continue;
-        }
-
-        let trusted: Vec<String> = bt_backend::list_trusted();
-        if trusted.is_empty() {
-            // Nothing to reconnect to; do not spin the radio.
-            if bt_backend::scan_running() {
-                bt_backend::stop_scan();
-            }
-            std::thread::sleep(IDLE_POLL);
-            continue;
-        }
-
-        // Auto-discovery. This was missing entirely: the daemon only ever
-        // called `connect`, and a trusted device that has been out of range
-        // (earbuds in their case) is not reliably pageable until the adapter
-        // has seen it advertise again. Keeping a discovery session alive while
-        // disconnected is what makes reconnect-on-power-up actually work.
-        // bluetoothctl's own session expires after SCAN_SESSION_SECS, so
-        // scan_running() going false is the cue to start the next one.
-        if !bt_backend::scan_running() {
-            bt_backend::start_scan();
-        }
-
-        let now = Instant::now();
-        for address in trusted {
-            if let Some(last_time) = last_attempt.get(&address)
-                && now.duration_since(*last_time) < RETRY_COOLDOWN {
-                    continue;
-                }
-
-            // Something may have connected while we worked through the list.
-            if bt_backend::get_connected_address().is_some() {
-                break;
-            }
-
-            eprintln!("Daemon: attempting auto-connect to trusted device {}", address);
-            last_attempt.insert(address.clone(), now);
-            bt_backend::connect_trusted_device(&address);
-
-            // Ask BlueZ what actually happened rather than trusting the
-            // return value: bluetoothctl reports failures in its text and
-            // still exits 0, so the old code logged "Successfully
-            // auto-connected" for every failed attempt.
-            if bt_backend::get_connected_address().as_deref() == Some(address.as_str()) {
-                eprintln!("Daemon: connected to {}", address);
-                bt_backend::stop_scan();
-                // Give BlueZ a moment to register the audio card with
-                // PipeWire before selecting a profile on it.
-                std::thread::sleep(Duration::from_secs(2));
-                if bt_backend::force_a2dp_profile(&address) {
-                    eprintln!("Daemon: selected A2DP profile for {}", address);
-                }
-                break;
-            }
-
-            eprintln!("Daemon: {} did not connect (out of range or powered off)", address);
-        }
-
-        std::thread::sleep(IDLE_POLL);
-    }
-}
-
-fn handle_commands(args: &[String]) -> Option<Result<(), Box<dyn std::error::Error>>> {
-    if args.len() <= 1 {
-        return None;
-    }
-
-    match args[1].as_str() {
-        "popup" | "gui" | "open" => {
-            None
-        }
+/// Handle a CLI subcommand. None means "open the GUI".
+fn handle_commands(args: &[String]) -> Option<Result<(), String>> {
+    let cmd = args.get(1)?;
+    let result = match cmd.as_str() {
+        "popup" | "gui" | "open" => return None,
         "quickshell" | "qs" => {
-            let home = std::env::var("HOME").unwrap_or_default();
-            let path = format!("{}/.config/quickshell/auralink", home);
-            let _ = std::process::Command::new("quickshell")
+            let path = format!("{}/.config/quickshell/auralink", std::env::var("HOME").unwrap_or_default());
+            std::process::Command::new("quickshell")
                 .args(["-p", &path])
-                .spawn();
-            Some(Ok(()))
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| format!("cannot start quickshell: {}", e))
         }
         "waybar-stream" => {
-            let powered = bt_backend::is_powered();
-            if !powered {
-                println!("{}", serde_json::json!({
-                    "text": "󰂲",
-                    "tooltip": "Bluetooth: Off",
-                    "class": "off"
-                }));
+            // One D-Bus read; Waybar runs this every few seconds.
+            let snap = bt_backend::Snapshot::read();
+            let out = if !snap.powered() {
+                serde_json::json!({"text": "󰂲", "tooltip": "Bluetooth: Off", "class": "off"})
+            } else if let Some(dev) = snap.connected().find(|d| d.is_audio).or_else(|| snap.connected().next()) {
+                // Prefer the headset over, say, an always-connected mouse.
+                let battery = dev.battery.map(|b| format!(" ({}%)", b)).unwrap_or_default();
+                serde_json::json!({
+                    "text": "󰂱",
+                    "tooltip": format!("Bluetooth: Connected to {}{}", dev.name, battery),
+                    "class": "connected"
+                })
             } else {
-                let connected_devices = bt_backend::list_connected_devices();
-                if let Some(dev) = connected_devices.first() {
-                    let battery_str = dev.battery.map(|b| format!(" ({}%)", b)).unwrap_or_default();
-                    println!("{}", serde_json::json!({
-                        "text": "󰂱",
-                        "tooltip": format!("Bluetooth: Connected to {}{}", dev.name, battery_str),
-                        "class": "connected"
-                    }));
-                } else {
-                    println!("{}", serde_json::json!({
-                        "text": "󰂯",
-                        "tooltip": "Bluetooth: Disconnected",
-                        "class": "disconnected"
-                    }));
-                }
-            }
-            Some(Ok(()))
+                serde_json::json!({"text": "󰂯", "tooltip": "Bluetooth: Disconnected", "class": "disconnected"})
+            };
+            println!("{}", out);
+            Ok(())
         }
-        "connect" => {
-            if args.len() < 3 {
-                eprintln!("Usage: auralink-bt connect <MAC_ADDRESS>");
-                return Some(Ok(()));
-            }
-            let mac = &args[2];
-            println!("Connecting to {}...", mac);
-            let success = bt_backend::connect(mac);
-            if success {
-                println!("Successfully connected to {}", mac);
-            } else {
-                eprintln!("Failed to connect to {}", mac);
-            }
-            Some(Ok(()))
-        }
-        "disconnect" => {
-            if args.len() < 3 {
-                eprintln!("Usage: auralink-bt disconnect <MAC_ADDRESS>");
-                return Some(Ok(()));
-            }
-            let mac = &args[2];
-            println!("Disconnecting {}...", mac);
-            let success = bt_backend::disconnect(mac);
-            if success {
-                println!("Disconnected {}", mac);
-            } else {
-                eprintln!("Failed to disconnect {}", mac);
-            }
-            Some(Ok(()))
-        }
-        "pair" => {
-            if args.len() < 3 {
-                eprintln!("Usage: auralink-bt pair <MAC_ADDRESS>");
-                return Some(Ok(()));
-            }
-            let mac = &args[2];
-            println!("Pairing with {}...", mac);
-            let success = bt_backend::pair(mac);
-            if success {
-                println!("Paired with {}", mac);
-            } else {
-                eprintln!("Failed to pair with {}", mac);
-            }
-            Some(Ok(()))
-        }
-        "trust" => {
-            if args.len() < 3 {
-                eprintln!("Usage: auralink-bt trust <MAC_ADDRESS>");
-                return Some(Ok(()));
-            }
-            let mac = &args[2];
-            println!("Trusting {}...", mac);
-            let success = bt_backend::trust(mac, true);
-            if success {
-                println!("Trusted {}", mac);
-            } else {
-                eprintln!("Failed to trust {}", mac);
-            }
-            Some(Ok(()))
-        }
-        "remove" | "unpair" => {
-            if args.len() < 3 {
-                eprintln!("Usage: auralink-bt remove <MAC_ADDRESS>");
-                return Some(Ok(()));
-            }
-            let mac = &args[2];
-            println!("Removing {}...", mac);
-            let success = bt_backend::remove(mac);
-            if success {
-                println!("Removed {}", mac);
-            } else {
-                eprintln!("Failed to remove {}", mac);
-            }
-            Some(Ok(()))
-        }
-        "daemon" | "--daemon" | "-d" => {
-            run_daemon();
-            Some(Ok(()))
-        }
+        "connect" => run_action(args, "connect", "Connecting to", "Connected to", autoconnect::manual_connect),
+        "disconnect" => run_action(args, "disconnect", "Disconnecting", "Disconnected", autoconnect::manual_disconnect),
+        "pair" => run_action(args, "pair", "Pairing with", "Paired with", |mac| {
+            autoconnect::unsuppress(mac);
+            bt_backend::pair(mac)
+        }),
+        "trust" => run_action(args, "trust", "Trusting", "Trusted", |mac| bt_backend::trust(mac, true)),
+        "remove" | "unpair" => run_action(args, "remove", "Removing", "Removed", |mac| {
+            autoconnect::unsuppress(mac);
+            bt_backend::remove(mac)
+        }),
+        "daemon" | "--daemon" | "-d" => autoconnect::run_daemon(),
         "status" => {
-            let powered = bt_backend::is_powered();
-            let connected_devices = bt_backend::list_connected_devices();
-            println!("{}", serde_json::json!({
-                "powered": powered,
-                "connected_devices": connected_devices
-            }));
-            Some(Ok(()))
+            let snap = bt_backend::Snapshot::read().with_audio_profiles();
+            let connected: Vec<_> = snap.connected().collect();
+            println!("{}", serde_json::json!({"powered": snap.powered(), "connected_devices": connected}));
+            Ok(())
         }
         "fullstatus" => {
-            let powered = bt_backend::is_powered();
-            let connected_devices = bt_backend::list_connected_devices();
-            let all_devices = bt_backend::list_devices();
-            println!("{}", serde_json::json!({
-                "status": {
-                    "powered": powered,
-                    "connected_devices": connected_devices
-                },
-                "all_devices": all_devices
-            }));
-            Some(Ok(()))
-        }
-        "--help" | "-h" | "help" => {
-            println!("Usage: auralink-bt [COMMAND]");
-            println!();
-            println!("Commands:");
-            println!("  popup            Open the Bluetooth GUI interface");
-            println!("  connect <MAC>    Connect to a Bluetooth device");
-            println!("  disconnect <MAC> Disconnect a Bluetooth device");
-            println!("  pair <MAC>       Pair with a Bluetooth device");
-            println!("  trust <MAC>      Trust a Bluetooth device");
-            println!("  remove <MAC>     Remove/unpair a Bluetooth device");
-            println!("  toggle           Toggle Bluetooth adapter power");
-            println!("  daemon           Run auto-connect background daemon (headless, no GUI)");
-            println!("  status           Get current connection status (JSON)");
-            println!("  fullstatus       Get detailed status including available devices (JSON)");
-            println!("  waybar-stream    Stream Waybar module output (JSON)");
-            println!("  --help           Show this help message");
-            Some(Ok(()))
+            let snap = bt_backend::Snapshot::read().with_audio_profiles();
+            let connected: Vec<_> = snap.connected().collect();
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": {"powered": snap.powered(), "connected_devices": connected},
+                    "all_devices": snap.devices,
+                })
+            );
+            Ok(())
         }
         "toggle" => {
-            let powered = bt_backend::is_powered();
-            bt_backend::set_power(!powered);
-            println!("Bluetooth power toggled {}", if !powered { "ON" } else { "OFF" });
-            Some(Ok(()))
+            let on = !bt_backend::is_powered();
+            bt_backend::set_power(on)
+                .map(|()| println!("Bluetooth power toggled {}", if on { "ON" } else { "OFF" }))
+                .map_err(|e| format!("Failed to toggle Bluetooth power: {}", e))
         }
-        cmd => {
-            eprintln!("Error: Unknown command '{}'", cmd);
-            println!("Usage: auralink-bt [COMMAND]");
-            println!();
-            println!("Commands:");
-            println!("  popup            Open the Bluetooth GUI interface");
-            println!("  connect <MAC>    Connect to a Bluetooth device");
-            println!("  disconnect <MAC> Disconnect a Bluetooth device");
-            println!("  pair <MAC>       Pair with a Bluetooth device");
-            println!("  trust <MAC>      Trust a Bluetooth device");
-            println!("  remove <MAC>     Remove/unpair a Bluetooth device");
-            println!("  toggle           Toggle Bluetooth adapter power");
-            println!("  daemon           Run auto-connect background daemon (headless, no GUI)");
-            println!("  status           Get current connection status (JSON)");
-            println!("  fullstatus       Get detailed status including available devices (JSON)");
-            println!("  waybar-stream    Stream Waybar module output (JSON)");
-            println!("  --help           Show this help message");
-            Some(Ok(()))
+        "--help" | "-h" | "help" => {
+            println!("{}", USAGE);
+            Ok(())
         }
-    }
+        other => {
+            eprintln!("{}", USAGE);
+            Err(format!("Error: Unknown command '{}'", other))
+        }
+    };
+    Some(result)
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), slint::PlatformError> {
     let args: Vec<String> = std::env::args().collect();
-    if let Some(res) = handle_commands(&args) {
-        return res;
+    if let Some(result) = handle_commands(&args) {
+        if let Err(e) = result {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+        return Ok(());
     }
 
-    let main_window = AppWindow::new().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-    let config = Arc::new(Mutex::new(AppConfig::load()));
-    
-    if let Ok(cfg) = config.lock() {
-        main_window.set_pywal_enabled(cfg.pywal_enabled);
-        if cfg.pywal_enabled {
-            apply_pywal_theme(main_window.as_weak());
-        }
+    let main_window = AppWindow::new()?;
+    let config = AppConfig::load(CONFIG_FILE);
+    let pywal_enabled = Arc::new(AtomicBool::new(config.pywal_enabled));
+    main_window.set_pywal_enabled(config.pywal_enabled);
+    if config.pywal_enabled
+        && let Some(theme) = Theme::from_pywal()
+    {
+        set_palette(&main_window, &theme);
     }
 
     let window_weak = main_window.as_weak();
@@ -446,51 +217,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let config_clone = config.clone();
     let window_weak = main_window.as_weak();
+    let pw = pywal_enabled.clone();
     main_window.on_toggle_pywal(move |enabled| {
-        if let Ok(mut cfg) = config_clone.lock() {
-            cfg.pywal_enabled = enabled;
-            cfg.save();
-            if enabled {
-                apply_pywal_theme(window_weak.clone());
-            } else {
-                let handle = window_weak.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = handle.upgrade() {
-                        let p = ui.global::<Palette>();
-                        p.set_background(Color::from_argb_u8(136, 9, 9, 11));
-                        p.set_card_bg(Color::from_rgb_u8(24, 24, 27));
-                        p.set_accent(Color::from_rgb_u8(0, 240, 255));
-                        p.set_foreground(Color::from_rgb_u8(248, 250, 252));
-                        p.set_secondary_fg(Color::from_rgb_u8(161, 161, 170));
-                        p.set_separator(Color::from_rgb_u8(39, 39, 42));
-                    }
-                });
-            }
-        }
+        pw.store(enabled, Ordering::Relaxed);
+        AppConfig { pywal_enabled: enabled }.save(CONFIG_FILE);
+        let theme = if enabled { Theme::from_pywal() } else { None };
+        apply_theme(window_weak.clone(), theme.unwrap_or_else(Theme::default_dark));
     });
 
-    main_window.on_toggle_bluetooth(|enabled| {
-        bt_backend::set_power(enabled);
+    let window_weak = main_window.as_weak();
+    common::spawn_pywal_watch(pywal_enabled, move |theme| apply_theme(window_weak.clone(), theme));
+
+    let window_weak = main_window.as_weak();
+    main_window.on_toggle_bluetooth(move |enabled| {
+        let ww = window_weak.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = bt_backend::set_power(enabled) {
+                set_status(&ww, format!("Power {} failed: {}", if enabled { "on" } else { "off" }, e));
+            }
+        });
     });
 
     let window_weak = main_window.as_weak();
     main_window.on_connect(move |address| {
         let address = address.to_string();
         let ww = window_weak.clone();
-        std::thread::spawn(move || {
-            let success = bt_backend::connect(&address);
-            let addr_msg = address.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(ui) = ww.upgrade() {
-                    ui.set_status_msg(if success { format!("Connected to {}", addr_msg) } else { "Failed!".to_string() }.into());
-                }
-            });
-            if success {
-                send_notification("Bluetooth Connected", &format!("Connected to {}", address), Some("bluetooth-active"));
-            } else {
-                send_notification("Bluetooth Connection Error", &format!("Failed to connect to {}", address), Some("dialog-error"));
+        set_status(&ww, format!("Connecting to {}...", address));
+        std::thread::spawn(move || match autoconnect::manual_connect(&address) {
+            Ok(()) => {
+                set_status(&ww, format!("Connected to {}", address));
+                notify("Bluetooth Connected", &format!("Connected to {}", address), Some("bluetooth-active"));
+            }
+            Err(e) => {
+                set_status(&ww, format!("Connect failed: {}", e));
+                notify("Bluetooth Connection Error", &format!("Failed to connect to {}: {}", address, e), Some("dialog-error"));
             }
         });
     });
@@ -499,18 +260,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_window.on_disconnect(move |address| {
         let address = address.to_string();
         let ww = window_weak.clone();
-        std::thread::spawn(move || {
-            let success = bt_backend::disconnect(&address);
-            let addr_msg = address.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(ui) = ww.upgrade() {
-                    ui.set_status_msg(if success { format!("Disconnected {}", addr_msg) } else { "Failed!".to_string() }.into());
-                }
-            });
-            if success {
-                send_notification("Bluetooth Disconnected", &format!("Disconnected {}", address), Some("bluetooth-disabled"));
-            } else {
-                send_notification("Bluetooth Error", &format!("Failed to disconnect {}", address), Some("dialog-error"));
+        std::thread::spawn(move || match autoconnect::manual_disconnect(&address) {
+            Ok(()) => {
+                set_status(&ww, format!("Disconnected {}", address));
+                notify("Bluetooth Disconnected", &format!("Disconnected {}", address), Some("bluetooth-disabled"));
+            }
+            Err(e) => {
+                set_status(&ww, format!("Disconnect failed: {}", e));
+                notify("Bluetooth Error", &format!("Failed to disconnect {}: {}", address, e), Some("dialog-error"));
             }
         });
     });
@@ -520,25 +277,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let address = address.to_string();
         let ww = window_weak.clone();
         std::thread::spawn(move || {
-            let success = bt_backend::trust(&address, trust);
-            if !success {
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = ww.upgrade() {
-                        ui.set_status_msg(format!("Trust failed for {}", address).into());
-                    }
-                });
-            } else {
-                eprintln!("Trust successful for {}, triggering scan refresh...", address);
-                std::thread::sleep(Duration::from_millis(500));
-                let _ = bt_backend::start_scan();
-                let addr = address.clone();
-                let t = trust;
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = ww.upgrade() {
-                        ui.set_status_msg(format!("{}ed {}", if t { "Trust" } else { "Untrust" }, addr).into());
-                    }
-                });
-            }
+            let msg = match bt_backend::trust(&address, trust) {
+                Ok(()) => format!("{} {}", if trust { "Trusted" } else { "Untrusted" }, address),
+                Err(e) => format!("Trust change failed for {}: {}", address, e),
+            };
+            set_status(&ww, msg);
         });
     });
 
@@ -547,20 +290,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let address = address.to_string();
         let ww = window_weak.clone();
         std::thread::spawn(move || {
-            let success = if pair {
-                bt_backend::pair(&address)
-            } else {
-                bt_backend::remove(&address)
-            };
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(ui) = ww.upgrade() {
-                    ui.set_status_msg(if success {
-                        if pair { format!("Paired {}", address).into() } else { format!("Removed {}", address).into() }
-                    } else {
-                        format!("Failed to {} for {}", if pair { "pair" } else { "unpair" }, address).into()
-                    });
-                }
-            });
+            autoconnect::unsuppress(&address);
+            let result = if pair { bt_backend::pair(&address) } else { bt_backend::remove(&address) };
+            let verb = if pair { "Paired" } else { "Removed" };
+            set_status(
+                &ww,
+                match result {
+                    Ok(()) => format!("{} {}", verb, address),
+                    Err(e) => format!("Failed to {} {}: {}", if pair { "pair" } else { "unpair" }, address, e),
+                },
+            );
         });
     });
 
@@ -569,13 +308,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let address = address.to_string();
         let ww = window_weak.clone();
         std::thread::spawn(move || {
-            let success = bt_backend::remove(&address);
-            if !success {
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = ww.upgrade() {
-                        ui.set_status_msg(format!("Remove failed for {}", address).into());
-                    }
-                });
+            autoconnect::unsuppress(&address);
+            if let Err(e) = bt_backend::remove(&address) {
+                set_status(&ww, format!("Remove failed for {}: {}", address, e));
             }
         });
     });
@@ -586,12 +321,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let profile = profile.to_string();
         let ww = window_weak.clone();
         std::thread::spawn(move || {
-            let success = bt_backend::set_audio_profile(&address, &profile);
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(ui) = ww.upgrade() {
-                    ui.set_status_msg(if success { format!("Profile set: {}", profile) } else { "Profile set failed".to_string() }.into());
-                }
-            });
+            let ok = bt_backend::set_audio_profile(&address, &profile);
+            set_status(&ww, if ok { format!("Profile set: {}", profile) } else { "Profile set failed".to_string() });
         });
     });
 
@@ -604,26 +335,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let window_weak = main_window.as_weak();
     main_window.on_refresh(move || {
-        if let Some(ui) = window_weak.upgrade() {
-            ui.set_is_scanning(true);
-            ui.set_status_msg("SCANNING...".into());
-            
-            let handle = window_weak.clone();
-            std::thread::spawn(move || {
-                let _ = bt_backend::start_scan();
-                std::thread::sleep(Duration::from_secs(15));
-                let _ = bt_backend::stop_scan();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = handle.upgrade() {
-                        ui.set_is_scanning(false);
-                        ui.set_status_msg("READY".into());
-                    }
-                });
+        let Some(ui) = window_weak.upgrade() else { return };
+        ui.set_is_scanning(true);
+        ui.set_status_msg("SCANNING...".into());
+        let handle = window_weak.clone();
+        std::thread::spawn(move || {
+            // Scanning is an explicit request, so switching the adapter on
+            // for it is what the user wants. (The daemon never does this.)
+            if !bt_backend::is_powered() {
+                let _ = bt_backend::set_power(true);
+            }
+            bt_backend::start_scan();
+            std::thread::sleep(Duration::from_secs(15));
+            bt_backend::stop_scan();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = handle.upgrade() {
+                    ui.set_is_scanning(false);
+                    ui.set_status_msg("READY".into());
+                }
             });
-        }
+        });
     });
 
-    // Initial scan on startup
+    // Initial scan on startup, once the window is up.
     let window_weak = main_window.as_weak();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(500));
@@ -634,188 +368,96 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
 
-    // Unified intelligent Auto-Connect & Connection Monitor Loop
+    // Auto-connect, for when the window runs without the daemon (e.g. no
+    // systemd unit installed). Re-checks every pass whether the daemon is
+    // active, so starting or stopping the unit hands the job over either way.
     let window_weak = main_window.as_weak();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(2));
-
-        eprintln!("=== Auto-connect & Connection Monitor loop starting ===");
         let _ = bt_backend::ensure_switch_on_connect_module();
-
-        let mut last_attempt: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
-        // None until the first check, so the first state is always announced.
+        let mut connector = autoconnect::AutoConnector::new();
         let mut deferring: Option<bool> = None;
-
         loop {
-            // Stand down while the headless daemon owns auto-connect; only the
-            // device-list refresh thread needs to keep running for the UI.
-            let defer = autoconnect_daemon_active();
+            let defer = autoconnect::daemon_active();
             if deferring != Some(defer) {
-                if defer {
-                    eprintln!("Auto-connect deferred to auralink-bt-daemon.service.");
-                } else {
-                    eprintln!("auralink-bt-daemon.service is not running; this window will auto-connect.");
-                }
+                eprintln!(
+                    "{}",
+                    if defer {
+                        "Auto-connect deferred to auralink-bt-daemon.service."
+                    } else {
+                        "auralink-bt-daemon.service is not running; this window will auto-connect."
+                    }
+                );
                 deferring = Some(defer);
             }
-            if defer {
-                std::thread::sleep(Duration::from_secs(10));
-                continue;
-            }
-
-            let connected_address = bt_backend::get_connected_address();
-
-            if connected_address.is_some() {
-                // Device is connected! Ensure background scanning is stopped to preserve A2DP stability.
-                bt_backend::stop_scan();
+            let wait = if defer {
+                Duration::from_secs(10)
             } else {
-                // No device is connected. Attempt to connect trusted devices with a cooldown.
-                let trusted: Vec<String> = bt_backend::list_trusted();
-                let now = Instant::now();
-
-                for address in trusted {
-                    // Check if we tried connecting to this address recently (cooldown of 30s)
-                    if let Some(last_time) = last_attempt.get(&address) {
-                        if now.duration_since(*last_time) < Duration::from_secs(30) {
-                            continue;
-                        }
-                    }
-
-                    // Check again if a device connected in the meantime
-                    if bt_backend::get_connected_address().is_some() {
-                        break;
-                    }
-
-                    eprintln!("Attempting auto-connect for trusted device: {}", address);
-                    last_attempt.insert(address.clone(), now);
-
-                    let success = bt_backend::connect_trusted_device(&address);
-                    let addr_clone = address.clone();
-                    let ww = window_weak.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(ui) = ww.upgrade() {
-                            ui.set_status_msg(if success {
-                                format!("Auto-connected {}", addr_clone).into()
-                            } else {
-                                format!("Auto-connect failed {}", addr_clone).into()
-                            });
-                        }
-                    });
-
-                    if success {
-                        bt_backend::stop_scan();
-                        std::thread::sleep(Duration::from_secs(2));
-                        let _ = bt_backend::force_a2dp_profile(&address);
-                        break;
-                    }
-                }
-            }
-
-            std::thread::sleep(Duration::from_secs(10));
+                connector.tick(&mut |msg| set_status(&window_weak, msg))
+            };
+            std::thread::sleep(wait);
         }
     });
 
+    // Device list refresh.
     let window_weak = main_window.as_weak();
     std::thread::spawn(move || {
         loop {
-            let devices = bt_backend::list_devices();
-            let internal_devices: Vec<InternalBluetoothDevice> = devices.into_iter().map(|d| {
-                InternalBluetoothDevice {
-                    name: d.name,
-                    address: d.address,
-                    connected: d.connected,
-                    paired: d.paired,
-                    trusted: d.trusted,
-                    rssi: d.rssi,
-                    battery: d.battery,
-                    batteries: d.batteries,
-                    audio_profiles: d.audio_profiles,
-                }
-            }).collect();
-
+            let snap = bt_backend::Snapshot::read().with_audio_profiles();
+            let powered = snap.powered();
+            let devices = snap.devices;
             let ww = window_weak.clone();
-            let powered = bt_backend::is_powered();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ww.upgrade() {
-                    let slint_devices: Vec<BluetoothDevice> = internal_devices.into_iter().map(|d| {
-                        let (icon, icon_color) = if d.connected { ("󰂱", Color::from_rgb_u8(0, 240, 255)) }
-                                                 else if d.paired { ("󰂲", Color::from_rgb_u8(245, 194, 17)) }
-                                                 else { ("󰂯", Color::from_rgb_u8(161, 161, 170)) };
-                        
-                        let slint_profiles: Vec<AudioProfile> = d.audio_profiles.into_iter().map(|p| {
-                            AudioProfile {
-                                name: p.name.into(),
-                                description: p.description.into(),
-                                active: p.active,
-                                available: p.available,
-                            }
-                        }).collect();
-
-                        let slint_batteries: Vec<BatteryInfo> = d.batteries.into_iter().map(|b| {
-                            BatteryInfo {
-                                label: b.label.into(),
-                                percentage: b.percentage,
-                            }
-                        }).collect();
-
-                        BluetoothDevice {
-                            name: d.name.into(),
-                            address: d.address.into(),
-                            connected: d.connected,
-                            paired: d.paired,
-                            trusted: d.trusted,
-                            rssi: d.rssi,
-                            battery: d.battery.unwrap_or(0),
-                            batteries: ModelRc::new(VecModel::from(slint_batteries)),
-                            icon: icon.into(),
-                            icon_color,
-                            audio_profiles: ModelRc::new(VecModel::from(slint_profiles)),
-                        }
-                    }).collect();
-
-                    ui.set_devices(ModelRc::new(VecModel::from(slint_devices)));
+                    let items: Vec<BluetoothDevice> = devices.into_iter().map(to_slint).collect();
+                    ui.set_devices(ModelRc::new(VecModel::from(items)));
                     ui.set_bluetooth_enabled(powered);
                 }
             });
-
             std::thread::sleep(Duration::from_secs(5));
         }
     });
 
-    main_window.run().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    main_window.run()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_handle_commands_none() {
-        let args = vec!["auralink-bt".to_string()];
-        assert!(handle_commands(&args).is_none());
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
     }
 
     #[test]
-    fn test_handle_commands_help() {
-        let args = vec!["auralink-bt".to_string(), "--help".to_string()];
-        assert!(handle_commands(&args).is_some());
+    fn no_args_opens_gui() {
+        assert!(handle_commands(&args(&["auralink-bt"])).is_none());
+        assert!(handle_commands(&args(&["auralink-bt", "popup"])).is_none());
     }
 
     #[test]
-    fn test_handle_commands_status() {
-        let args = vec!["auralink-bt".to_string(), "status".to_string()];
-        assert!(handle_commands(&args).is_some());
+    fn help_succeeds() {
+        assert!(matches!(handle_commands(&args(&["auralink-bt", "--help"])), Some(Ok(()))));
     }
 
     #[test]
-    fn test_handle_commands_fullstatus() {
-        let args = vec!["auralink-bt".to_string(), "fullstatus".to_string()];
-        assert!(handle_commands(&args).is_some());
+    fn status_commands_are_handled() {
+        // These read live BlueZ state; with no BlueZ they report it empty.
+        assert!(matches!(handle_commands(&args(&["auralink-bt", "status"])), Some(Ok(()))));
+        assert!(matches!(handle_commands(&args(&["auralink-bt", "fullstatus"])), Some(Ok(()))));
     }
 
     #[test]
-    fn test_handle_commands_unknown() {
-        let args = vec!["auralink-bt".to_string(), "unknown".to_string()];
-        assert!(handle_commands(&args).is_some());
+    fn unknown_command_fails() {
+        assert!(matches!(handle_commands(&args(&["auralink-bt", "unknown"])), Some(Err(_))));
+    }
+
+    #[test]
+    fn device_commands_need_a_valid_mac() {
+        // Missing argument: usage error, nothing touched.
+        assert!(matches!(handle_commands(&args(&["auralink-bt", "connect"])), Some(Err(_))));
+        // Malformed address is rejected before any D-Bus call.
+        let res = handle_commands(&args(&["auralink-bt", "trust", "not-a-mac"]));
+        assert!(matches!(res, Some(Err(e)) if e.contains("not a Bluetooth address")));
     }
 }

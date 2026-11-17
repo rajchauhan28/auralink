@@ -1,9 +1,6 @@
-use std::process::Command;
-use std::sync::atomic::AtomicBool;
-
-pub static AIRPLANE_MODE: AtomicBool = AtomicBool::new(false);
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Network {
@@ -39,111 +36,128 @@ fn parse_nmcli_line(line: &str) -> Vec<String> {
     parts
 }
 
-pub fn list_networks() -> Vec<Network> {
-    let saved_ssids = get_saved_ssids();
-    let active_ssid = get_active_ssid();
+/// One row of `nmcli connection show`.
+struct Connection {
+    name: String,
+    ctype: String,
+    /// "activated", "activating", ... or empty when inactive.
+    state: String,
+    device: String,
+}
 
-    let output = Command::new("nmcli")
-        .args(["-t", "-f", "SSID,BSSID,SIGNAL,SECURITY,IN-USE", "dev", "wifi", "list"])
+/// Every saved connection, in one nmcli call. Feeds the saved-network flags,
+/// the wired entries and the VPN list, which used to make three calls.
+fn connections() -> Vec<Connection> {
+    let Ok(output) = Command::new("nmcli")
+        .args(["-t", "-f", "NAME,TYPE,STATE,DEVICE", "connection", "show"])
         .output()
-        .expect("failed to execute nmcli");
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(parse_nmcli_line)
+        .filter(|p| p.len() >= 4)
+        .map(|p| Connection { name: p[0].clone(), ctype: p[1].clone(), state: p[2].clone(), device: p[3].clone() })
+        .collect()
+}
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut networks = Vec::new();
-    let mut seen_ssids = HashSet::new();
+fn is_ethernet(ctype: &str) -> bool {
+    ctype == "802-3-ethernet" || ctype == "ethernet"
+}
 
-    // Add Ethernet connections first
-    if let Ok(eth_output) = Command::new("nmcli")
-        .args(["-t", "-f", "NAME,TYPE,STATE,DEVICE", "con", "show", "--active"])
-        .output() {
-        let eth_stdout = String::from_utf8_lossy(&eth_output.stdout);
-        for line in eth_stdout.lines() {
-            let parts = parse_nmcli_line(line);
-            if parts.len() >= 4 && (parts[1] == "802-3-ethernet" || parts[1] == "ethernet") {
-                networks.push(Network {
-                    ssid: parts[0].to_string(),
-                    bssid: parts[3].to_string(), // Use device name as BSSID for ethernet
-                    signal: 100,
-                    security: "Wired".to_string(),
-                    connected: true,
-                    ping: None,
-                    saved: true,
-                    is_ethernet: true,
-                });
+/// Wired connections that are up, then visible Wi-Fi networks, best first.
+///
+/// `allow_rescan` = false reads NetworkManager's cached scan results.
+/// nmcli's default (`--rescan auto`) starts a new scan whenever the cache is
+/// older than 30s *and blocks until it finishes*; polled every 10s by the
+/// window and every few seconds by Waybar via `status`, that kept the radio
+/// scanning around the clock, which costs latency spikes on the live link.
+/// The window now requests scans itself (see trigger_rescan).
+pub fn list_networks(allow_rescan: bool) -> Vec<Network> {
+    networks_from(&connections(), allow_rescan)
+}
+
+fn networks_from(conns: &[Connection], allow_rescan: bool) -> Vec<Network> {
+    let rescan = if allow_rescan { "auto" } else { "no" };
+    let rows: Vec<Vec<String>> = Command::new("nmcli")
+        .args(["-t", "-f", "SSID,BSSID,SIGNAL,SECURITY,IN-USE", "device", "wifi", "list", "--rescan", rescan])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(parse_nmcli_line).filter(|p| p.len() >= 5).collect())
+        .unwrap_or_default();
+    build_networks(conns, &rows)
+}
+
+/// `rows` are parsed `nmcli -t -f SSID,BSSID,SIGNAL,SECURITY,IN-USE` lines.
+fn build_networks(conns: &[Connection], rows: &[Vec<String>]) -> Vec<Network> {
+    let mut networks: Vec<Network> = conns
+        .iter()
+        .filter(|c| is_ethernet(&c.ctype) && c.state == "activated")
+        .map(|c| Network {
+            ssid: c.name.clone(),
+            bssid: c.device.clone(), // device name stands in for a BSSID
+            signal: 100,
+            security: "Wired".to_string(),
+            connected: true,
+            ping: None,
+            saved: true,
+            is_ethernet: true,
+        })
+        .collect();
+
+    let saved: HashSet<&str> = conns
+        .iter()
+        .filter(|c| c.ctype.contains("wireless") || is_ethernet(&c.ctype))
+        .map(|c| c.name.as_str())
+        .collect();
+
+    // An SSID is in use if ANY of its access points is.
+    let active: HashSet<&str> = rows.iter().filter(|p| p[4] == "*").map(|p| p[0].as_str()).collect();
+
+    // One entry per SSID, keeping its strongest access point.
+    let mut index: HashMap<String, usize> = HashMap::new();
+    for p in rows {
+        let ssid = &p[0];
+        if ssid.is_empty() {
+            continue; // hidden network
+        }
+        let signal: u8 = p[2].parse().unwrap_or(0);
+        if let Some(&i) = index.get(ssid) {
+            if signal > networks[i].signal {
+                networks[i].signal = signal;
+                networks[i].bssid = p[1].clone();
             }
+            continue;
         }
+        index.insert(ssid.clone(), networks.len());
+        networks.push(Network {
+            ssid: ssid.clone(),
+            bssid: p[1].clone(),
+            signal,
+            security: p[3].clone(),
+            connected: active.contains(ssid.as_str()),
+            ping: None,
+            saved: saved.contains(ssid.as_str()),
+            is_ethernet: false,
+        });
     }
 
-    for line in stdout.lines() {
-        let parts = parse_nmcli_line(line);
-
-        if parts.len() >= 5 {
-            let ssid = parts[0].to_string();
-            if ssid.is_empty() || seen_ssids.contains(&ssid) { continue; }
-            
-            let is_connected = parts[4] == "*" || active_ssid.as_deref() == Some(&ssid);
-            let is_saved = saved_ssids.contains(&ssid);
-            
-            networks.push(Network {
-                ssid: ssid.clone(),
-                bssid: parts[1].to_string(),
-                signal: parts[2].parse().unwrap_or(0),
-                security: parts[3].to_string(),
-                connected: is_connected,
-                ping: None,
-                saved: is_saved,
-                is_ethernet: false,
-            });
-            seen_ssids.insert(ssid);
-        }
-    }
-    
     networks.sort_by(|a, b| {
-        b.connected.cmp(&a.connected)
+        b.connected
+            .cmp(&a.connected)
             .then_with(|| b.is_ethernet.cmp(&a.is_ethernet))
             .then_with(|| b.saved.cmp(&a.saved))
             .then_with(|| b.signal.cmp(&a.signal))
     });
-    
     networks
 }
 
-fn get_active_ssid() -> Option<String> {
-    let output = Command::new("nmcli")
-        .args(["-t", "-f", "ACTIVE,SSID", "dev", "wifi"])
-        .output()
-        .ok()?;
-    
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .find(|l| l.starts_with("yes:"))
-        .map(|l| {
-            let parts = parse_nmcli_line(l);
-            parts.get(1).cloned().unwrap_or_default()
-        })
-}
-
-fn get_saved_ssids() -> HashSet<String> {
-    let output = Command::new("nmcli")
-        .args(["-t", "-f", "NAME,TYPE", "connection", "show"])
-        .output()
-        .ok();
-
-    let mut saved = HashSet::new();
-    if let Some(o) = output {
-        let stdout = String::from_utf8_lossy(&o.stdout);
-        for line in stdout.lines() {
-            let parts = parse_nmcli_line(line);
-            if parts.len() >= 2 && (parts[1].contains("wireless") || parts[1].contains("ethernet")) {
-                saved.insert(parts[0].to_string());
-            }
-        }
-    }
-    saved
-}
-
+/// Ask NetworkManager for a fresh Wi-Fi scan. Returns once the request is
+/// accepted; results land in the cache a few seconds later.
 pub fn trigger_rescan() {
-    let _ = Command::new("nmcli").args(["dev", "wifi", "rescan"]).spawn();
+    // status(), not spawn(): a dropped Child is never reaped and stays a
+    // zombie for the life of the window.
+    let _ = Command::new("nmcli").args(["device", "wifi", "rescan"]).status();
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,57 +167,40 @@ pub struct VpnConnection {
     pub active: bool,
 }
 
-pub fn list_vpns() -> Vec<VpnConnection> {
-    let mut vpns = Vec::new();
+/// Networks and VPNs from a single `nmcli connection show`.
+pub fn list_networks_and_vpns(allow_rescan: bool) -> (Vec<Network>, Vec<VpnConnection>) {
+    let conns = connections();
+    (networks_from(&conns, allow_rescan), vpns_from(&conns))
+}
 
-    if let Ok(output) = Command::new("nmcli").args(["-t", "-f", "NAME,TYPE,STATE", "c", "show"]).output() {
+fn vpns_from(conns: &[Connection]) -> Vec<VpnConnection> {
+    let mut vpns: Vec<VpnConnection> = conns
+        .iter()
+        .filter(|c| matches!(c.ctype.as_str(), "wireguard" | "vpn" | "openvpn"))
+        .map(|c| VpnConnection { name: c.name.clone(), vpn_type: c.ctype.clone(), active: c.state == "activated" })
+        .collect();
+
+    let warp_service_up = Command::new("systemctl")
+        .args(["is-active", "--quiet", "warp-svc"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if warp_service_up && let Ok(output) = Command::new("warp-cli").arg("status").output() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            let parts = parse_nmcli_line(line);
-            if parts.len() >= 3 {
-                let name = &parts[0];
-                let ctype = &parts[1];
-                let state = &parts[2];
-                if ctype == "wireguard" || ctype == "vpn" || ctype == "openvpn" {
-                    vpns.push(VpnConnection {
-                        name: name.to_string(),
-                        vpn_type: ctype.to_string(),
-                        active: state == "activated",
-                    });
-                }
-            }
-        }
+        vpns.push(VpnConnection {
+            name: "Cloudflare WARP".to_string(),
+            vpn_type: "warp".to_string(),
+            // Case-sensitive on purpose: "Disconnected" does not match.
+            active: stdout.contains("Connected"),
+        });
     }
 
-    let warp_active = Command::new("systemctl").args(["is-active", "warp-svc"]).output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "active")
-        .unwrap_or(false);
-
-    if warp_active
-        && let Ok(output) = Command::new("warp-cli").arg("status").output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            vpns.push(VpnConnection {
-                name: "Cloudflare WARP".to_string(),
-                vpn_type: "warp".to_string(),
-                active: stdout.contains("Status update: Connected") || stdout.contains("Connected"),
-            });
-        }
-
-    if let Ok(output) = Command::new("ip").args(["link", "show", "hiddify-tun"]).output() {
-        if output.status.success() {
-             vpns.push(VpnConnection {
-                name: "Hiddify".to_string(),
-                vpn_type: "hiddify".to_string(),
-                active: true,
-            });
-        } else if let Ok(output) = Command::new("pgrep").arg("-x").arg("hiddify").output()
-        && output.status.success() {
-            vpns.push(VpnConnection {
-               name: "Hiddify".to_string(),
-               vpn_type: "hiddify".to_string(),
-               active: true,
-           });
-        }
+    // Hiddify: its tun device, else its process. A sysfs check instead of
+    // spawning `ip link show` on every poll.
+    let hiddify_up = std::path::Path::new("/sys/class/net/hiddify-tun").exists()
+        || Command::new("pgrep").args(["-x", "hiddify"]).output().map(|o| o.status.success()).unwrap_or(false);
+    if hiddify_up {
+        vpns.push(VpnConnection { name: "Hiddify".to_string(), vpn_type: "hiddify".to_string(), active: true });
     }
 
     vpns
@@ -488,19 +485,24 @@ pub fn get_active_interface() -> Option<String> {
     wifi_iface
 }
 
+/// (rx_bytes, tx_bytes) for an interface, from /proc/net/dev.
 pub fn get_interface_stats(iface: &str) -> Option<(u64, u64)> {
-    let content = std::fs::read_to_string("/proc/net/dev").ok()?;
-    for line in content.lines() {
-        if line.contains(iface) {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 10 {
-                let rx = parts[1].parse::<u64>().unwrap_or(0);
-                let tx = parts[9].parse::<u64>().unwrap_or(0);
-                return Some((rx, tx));
-            }
+    parse_proc_net_dev(&std::fs::read_to_string("/proc/net/dev").ok()?, iface)
+}
+
+/// Lines look like `  wlan0: 1234 56 ...`. Match the name before the colon
+/// exactly: a substring match let "eth0" pick up "veth0..." rows.
+fn parse_proc_net_dev(content: &str, iface: &str) -> Option<(u64, u64)> {
+    content.lines().find_map(|line| {
+        let (name, counters) = line.split_once(':')?;
+        if name.trim() != iface {
+            return None;
         }
-    }
-    None
+        let fields: Vec<&str> = counters.split_whitespace().collect();
+        // Receive: bytes packets errs drop fifo frame compressed multicast,
+        // then Transmit: bytes ...
+        Some((fields.first()?.parse().ok()?, fields.get(8)?.parse().ok()?))
+    })
 }
 
 pub fn connect_to_wifi(ssid: &str, password: Option<&str>) -> bool {
@@ -578,4 +580,68 @@ pub fn toggle_wifi_power(enabled: bool) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn conn(name: &str, ctype: &str, state: &str, device: &str) -> Connection {
+        Connection { name: name.into(), ctype: ctype.into(), state: state.into(), device: device.into() }
+    }
+
+    #[test]
+    fn nmcli_terse_lines_honour_escapes() {
+        assert_eq!(parse_nmcli_line(r"Cafe\:5G:AA\:BB:70"), ["Cafe:5G", "AA:BB", "70"]);
+        assert_eq!(parse_nmcli_line("a::c"), ["a", "", "c"]);
+    }
+
+    #[test]
+    fn proc_net_dev_matches_exact_interface() {
+        let content = "Inter-|   Receive |  Transmit
+ face |bytes packets errs drop fifo frame compressed multicast|bytes packets
+ veth0abc: 999 1 0 0 0 0 0 0 888 1 0 0 0 0 0 0
+    eth0: 1000 2 0 0 0 0 0 0 2000 3 0 0 0 0 0 0
+";
+        assert_eq!(parse_proc_net_dev(content, "eth0"), Some((1000, 2000)));
+        assert_eq!(parse_proc_net_dev(content, "wlan0"), None);
+    }
+
+    #[test]
+    fn builds_network_list() {
+        let conns = [
+            conn("Home", "802-11-wireless", "activated", "wlan0"),
+            conn("Office LAN", "802-3-ethernet", "activated", "enp1s0"),
+            conn("Old LAN", "802-3-ethernet", "", ""),
+            conn("wg0", "wireguard", "", ""),
+        ];
+        let row = |ssid: &str, bssid: &str, signal: &str, inuse: &str| {
+            vec![ssid.to_string(), bssid.to_string(), signal.to_string(), "WPA2".to_string(), inuse.to_string()]
+        };
+        let rows = [
+            row("Cafe", "11", "80", ""),
+            // Two APs for Home: the in-use one is weaker and listed second.
+            row("Home", "21", "90", ""),
+            row("Home", "22", "40", "*"),
+            row("", "31", "99", ""), // hidden
+            row("Home", "23", "95", ""),
+        ];
+        let nets = build_networks(&conns, &rows);
+        let names: Vec<&str> = nets.iter().map(|n| n.ssid.as_str()).collect();
+        // Connected (wired before Wi-Fi), then saved, then by signal.
+        assert_eq!(names, ["Office LAN", "Home", "Cafe"]);
+        let home = &nets[1];
+        assert!(home.connected, "in use via its second access point");
+        assert!(home.saved);
+        assert_eq!((home.signal, home.bssid.as_str()), (95, "23"), "strongest AP kept");
+        assert!(!nets[2].connected && !nets[2].saved);
+    }
+
+    #[test]
+    fn vpn_rows_are_picked_from_connections() {
+        let conns = [conn("wg0", "wireguard", "activated", "wg0"), conn("Home", "802-11-wireless", "", "")];
+        let vpns: Vec<_> = vpns_from(&conns).into_iter().filter(|v| v.vpn_type == "wireguard").collect();
+        assert_eq!(vpns.len(), 1);
+        assert!(vpns[0].active);
+    }
 }
