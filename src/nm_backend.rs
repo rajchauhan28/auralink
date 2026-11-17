@@ -447,7 +447,21 @@ pub fn get_network_config(ssid: &str) -> Option<NetworkConfig> {
     Some(config)
 }
 
-pub fn update_network_config(ssid: &str, config: NetworkConfig) -> bool {
+/// nmcli's error text for a failed run, or a generic one.
+fn nmcli_error(out: &std::process::Output) -> String {
+    let err = String::from_utf8_lossy(&out.stderr);
+    let err = err.trim();
+    if err.is_empty() {
+        "nmcli failed".to_string()
+    } else {
+        err.trim_start_matches("Error: ").to_string()
+    }
+}
+
+/// Save the Advanced dialog. Everything except the password goes through
+/// `nmcli connection modify`; the password goes over D-Bus (see nm_dbus) so
+/// it never appears in a process argument list.
+pub fn update_network_config(ssid: &str, config: NetworkConfig) -> Result<(), String> {
     let mut args = vec![
         "connection".to_string(),
         "modify".to_string(),
@@ -506,14 +520,17 @@ pub fn update_network_config(ssid: &str, config: NetworkConfig) -> bool {
         args.push(config.mac_address);
     }
 
-    if !is_eth && !config.password.is_empty() {
-        args.push("802-11-wireless-security.psk".to_string());
-        args.push(config.password);
+    let out = Command::new("nmcli")
+        .args(&args)
+        .output()
+        .map_err(|e| format!("cannot run nmcli: {}", e))?;
+    if !out.status.success() {
+        return Err(nmcli_error(&out));
     }
-
-    let output = Command::new("nmcli").args(&args).output();
-
-    output.map(|o| o.status.success()).unwrap_or(false)
+    if !is_eth && !config.password.is_empty() {
+        crate::nm_dbus::set_wifi_password(ssid, &config.password)?;
+    }
+    Ok(())
 }
 
 pub fn get_ping(host: &str) -> Option<u64> {
@@ -585,27 +602,28 @@ fn parse_proc_net_dev(content: &str, iface: &str) -> Option<(u64, u64)> {
     })
 }
 
-pub fn connect_to_wifi(ssid: &str, password: Option<&str>) -> bool {
+/// Connect to a network: with a password over D-Bus (see nm_dbus), without
+/// one by bringing up the saved profile, falling back to a fresh connect for
+/// an open network.
+pub fn connect_to_wifi(ssid: &str, password: Option<&str>) -> Result<(), String> {
     if let Some(pass) = password {
-        let mut cmd = Command::new("nmcli");
-        cmd.args([
-            "--wait", "15", "dev", "wifi", "connect", ssid, "password", pass,
-        ]);
-        cmd.output().map(|o| o.status.success()).unwrap_or(false)
+        return crate::nm_dbus::connect_with_password(ssid, pass);
+    }
+    let run = |args: &[&str]| {
+        Command::new("nmcli")
+            .args(args)
+            .output()
+            .map_err(|e| format!("cannot run nmcli: {}", e))
+    };
+    let saved = run(&["--wait", "15", "connection", "up", "id", ssid])?;
+    if saved.status.success() {
+        return Ok(());
+    }
+    let fresh = run(&["--wait", "15", "device", "wifi", "connect", ssid])?;
+    if fresh.status.success() {
+        Ok(())
     } else {
-        let mut cmd = Command::new("nmcli");
-        cmd.args(["--wait", "15", "connection", "up", "id", ssid]);
-        let output = cmd.output();
-
-        if let Ok(o) = output
-            && o.status.success()
-        {
-            return true;
-        }
-
-        let mut cmd2 = Command::new("nmcli");
-        cmd2.args(["--wait", "15", "dev", "wifi", "connect", ssid]);
-        cmd2.output().map(|o| o.status.success()).unwrap_or(false)
+        Err(nmcli_error(&fresh))
     }
 }
 

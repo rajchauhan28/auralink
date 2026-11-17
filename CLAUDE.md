@@ -16,6 +16,7 @@ cargo run --bin auralink-bt -- daemon         # headless auto-connect loop (what
 
 cargo test --locked                           # unit tests for both binaries
 cargo test --bin auralink-bt help_succeeds    # single test (name filter)
+cargo test --bin auralink nm_dbus -- --ignored --test-threads=1   # live NetworkManager tests (throwaway profile, never activates)
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 
@@ -32,13 +33,17 @@ cargo fmt --all -- --check
 
 There is no library crate. `src/main.rs` (`auralink`) and `src/bt_main.rs` (`auralink-bt`) are separate binaries that each declare the modules they use with `mod`:
 
-- `main.rs` -> `nm_backend.rs`, `common.rs`, and `bt_backend.rs` (only for airplane mode).
+- `main.rs` -> `nm_backend.rs`, `nm_dbus.rs`, `common.rs`, and `bt_backend.rs` (only for airplane mode).
 - `bt_main.rs` -> `bt_backend.rs`, `autoconnect.rs`, `common.rs`.
 - `common.rs` holds what both windows share: the per-app config file (`~/.config/auralink/config.json` vs `bt_config.json`), `send_notification`, and the pywal `Theme` and its live watcher (`spawn_pywal_watch`). Each binary maps `Theme` onto its own Slint global (`WifiPalette` in wifi.slint, `Palette` in bluetooth.slint). Modules shared across binaries carry `#![allow(dead_code)]`.
 
 **`bt_backend` reads state over D-Bus.** `Snapshot::read()` makes one `busctl --json=short call org.bluez / ...ObjectManager GetManagedObjects` and parses every adapter, device (Alias, Icon, Paired/Trusted/Connected, RSSI, UUIDs) and `Battery1`, including per-component batteries on child objects. `with_audio_profiles()` adds card profiles from a single `pactl --format=json list cards`. Actions (connect, disconnect, trust, remove, power) are single `busctl call`/`set-property` invocations; success is the exit status, and the error text is the D-Bus error. `bluetoothctl` is used only for discovery (a long-lived `--timeout 60 scan on` child in `SCAN_CHILD`) and pairing (its agent answers the pairing request).
 
-**`nm_backend` drives `nmcli`** in terse `-t` mode, parsed with `parse_nmcli_line`, which honours `\:` escapes. Other sources: `systemctl`/`warp-cli` for WARP, `/sys/class/net/hiddify-tun` or `pgrep` for Hiddify, `ping`, and `/proc/net/dev` for throughput. `list_networks_and_vpns` makes one `nmcli connection show` call plus one `device wifi list`.
+**`nm_backend` drives `nmcli`** in terse `-t` mode, parsed with `parse_nmcli_line`, which honours `\:` escapes. Other sources: `systemctl`/`warp-cli` for WARP, `/sys/class/net/hiddify-tun` or `pgrep` for Hiddify, `ping`, and `/proc/net/dev` for throughput. `list_networks_and_vpns` makes one `nmcli connection show` call plus one `device wifi list`. The two operations that carry a Wi-Fi password live in `nm_dbus.rs`:
+- `connect_with_password` reuses a saved profile for the SSID if there is one; otherwise it calls `AddAndActivateConnection` and deletes the new profile if activation fails.
+- `set_wifi_password` uses `GetSettings` + `GetSecrets` + `Update`, and skips the write when the value is unchanged.
+
+Both talk to NetworkManager directly over D-Bus with zbus's blocking API. zbus is already compiled in through Slint's winit backend.
 
 **UI wiring.** `build.rs` compiles `ui/wifi.slint` and `ui/bluetooth.slint` into `OUT_DIR`, and each binary `include!`s its generated module. A new `.slint` file must be added to `build.rs` (both the `compile` and the `rerun-if-changed` lines). Each binary's GUI follows the same pattern:
 - Slint callbacks spawn a `std::thread`, call the blocking backend, then hop back with `slint::invoke_from_event_loop` (the `set_status`/`apply_theme` helpers) using a `Weak` window handle. Never call a backend function on the UI thread.
@@ -64,7 +69,7 @@ There is no library crate. `src/main.rs` (`auralink`) and `src/bt_main.rs` (`aur
 - `bluez-utils`, `pactl` and `notify-send` are optional at runtime. A missing tool must produce empty results or an error, never a panic. The release profile uses `panic = "abort"`, so a panic in any thread kills the app.
 - **Poll Wi-Fi with `--rescan no`.** nmcli's default `--rescan auto` blocks on a fresh scan whenever results are over 30s old. It made `auralink waybar-stream` take 5.5s and kept the radio scanning.
 - `nmcli device disconnect` takes an interface name (e.g. `wlan0`), not a type such as `wifi`.
-- Wi-Fi passwords are still passed to `nmcli` as argv in `connect_to_wifi` and `update_network_config`, where other local users can see them in `ps`. Fixing this needs testing against a real network join.
+- **Never put a secret on a command line.** Argv is world-readable via `/proc/<pid>/cmdline`. Wi-Fi passwords go through `nm_dbus`, never `nmcli ... password X` or `... psk X`. Reading secrets with `nmcli -s` is fine, because they arrive on stdout. Note that `nmcli -g` escapes `:` and `\` in values.
 
 ## Packaging and release
 

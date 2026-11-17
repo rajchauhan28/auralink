@@ -1,6 +1,7 @@
 mod bt_backend;
 mod common;
 mod nm_backend;
+mod nm_dbus;
 
 use common::{AppConfig, Theme};
 use rfd::FileDialog;
@@ -109,12 +110,9 @@ fn handle_commands(args: &[String]) -> Option<Result<(), String>> {
             None => Err("Usage: auralink connect <SSID> [password]".to_string()),
             Some(ssid) => {
                 println!("Connecting to {}...", ssid);
-                if nm_backend::connect_to_wifi(ssid, args.get(3).map(String::as_str)) {
-                    println!("Successfully connected to {}", ssid);
-                    Ok(())
-                } else {
-                    Err(format!("Failed to connect to {}", ssid))
-                }
+                nm_backend::connect_to_wifi(ssid, args.get(3).map(String::as_str))
+                    .map(|()| println!("Successfully connected to {}", ssid))
+                    .map_err(|e| format!("Failed to connect to {}: {}", ssid, e))
             }
         },
         "disconnect" => {
@@ -377,23 +375,26 @@ fn main() -> Result<(), slint::PlatformError> {
                 password: pass.to_string(),
             };
             let ww = window_weak.clone();
-            std::thread::spawn(move || {
-                if nm_backend::update_network_config(&ssid, config) {
-                    set_status(&ww, "Settings saved".to_string());
-                    notify(
-                        "Wi-Fi Configuration",
-                        &format!("Settings saved for {}", ssid),
-                        Some("network-wireless-encrypted"),
-                    );
-                } else {
-                    set_status(&ww, "Save failed".to_string());
-                    notify(
-                        "Wi-Fi Error",
-                        &format!("Failed to save settings for {}", ssid),
-                        Some("dialog-error"),
-                    );
-                }
-            });
+            std::thread::spawn(
+                move || match nm_backend::update_network_config(&ssid, config) {
+                    Ok(()) => {
+                        set_status(&ww, "Settings saved".to_string());
+                        notify(
+                            "Wi-Fi Configuration",
+                            &format!("Settings saved for {}", ssid),
+                            Some("network-wireless-encrypted"),
+                        );
+                    }
+                    Err(e) => {
+                        set_status(&ww, format!("Save failed: {}", e));
+                        notify(
+                            "Wi-Fi Error",
+                            &format!("Failed to save settings for {}: {}", ssid, e),
+                            Some("dialog-error"),
+                        );
+                    }
+                },
+            );
         },
     );
 
@@ -416,11 +417,10 @@ fn main() -> Result<(), slint::PlatformError> {
 
         let ww = window_weak.clone();
         std::thread::spawn(move || {
-            let success = nm_backend::connect_to_wifi(&ssid, password.as_deref());
-            let msg = if success {
-                format!("Connected to {}", ssid)
-            } else {
-                "Failed!".to_string()
+            let result = nm_backend::connect_to_wifi(&ssid, password.as_deref());
+            let msg = match &result {
+                Ok(()) => format!("Connected to {}", ssid),
+                Err(e) => format!("Failed: {}", e),
             };
             let handle = ww.clone();
             let _ = slint::invoke_from_event_loop(move || {
@@ -429,18 +429,17 @@ fn main() -> Result<(), slint::PlatformError> {
                     ui.set_status_msg(msg.into());
                 }
             });
-            if success {
-                notify(
+            match result {
+                Ok(()) => notify(
                     "Wi-Fi Connected",
                     &format!("Connected to {}", ssid),
                     Some("network-wireless-connected"),
-                );
-            } else {
-                notify(
+                ),
+                Err(e) => notify(
                     "Wi-Fi Connection Error",
-                    &format!("Failed to connect to {}", ssid),
+                    &format!("Failed to connect to {}: {}", ssid, e),
                     Some("network-wireless-offline"),
-                );
+                ),
             }
         });
     });
