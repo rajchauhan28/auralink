@@ -161,12 +161,12 @@ async fn main() -> Result<(), slint::PlatformError> {
             }
             "disconnect" => {
                 println!("Disconnecting Wi-Fi...");
-                let success = nm_backend::disconnect_wifi();
-                if success {
-                    println!("Disconnected successfully");
-                } else {
-                    eprintln!("Disconnect failed");
-                    std::process::exit(1);
+                match nm_backend::disconnect_wifi() {
+                    Ok(()) => println!("Disconnected successfully"),
+                    Err(e) => {
+                        eprintln!("Disconnect failed: {}", e);
+                        std::process::exit(1);
+                    }
                 }
                 return Ok(());
             }
@@ -343,18 +343,23 @@ async fn main() -> Result<(), slint::PlatformError> {
 
     let window_weak = main_window.as_weak();
     main_window.on_disconnect(move || {
-        let success = nm_backend::disconnect_wifi();
         let ww = window_weak.clone();
+        // nmcli runs on the worker thread; calling it here, on the UI thread,
+        // froze the window until NetworkManager answered.
         std::thread::spawn(move || {
+            let result = nm_backend::disconnect_wifi();
+            let msg = match &result {
+                Ok(()) => "Disconnected".to_string(),
+                Err(e) => format!("Disconnect failed: {}", e),
+            };
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ww.upgrade() {
-                    ui.set_status_msg(if success { "Disconnected".into() } else { "Disconnect failed".into() });
+                    ui.set_status_msg(msg.into());
                 }
             });
-            if success {
-                send_notification("Wi-Fi Disconnected", "Disconnected successfully", Some("network-wireless-disconnected"));
-            } else {
-                send_notification("Wi-Fi Error", "Disconnect failed", Some("dialog-error"));
+            match result {
+                Ok(()) => send_notification("Wi-Fi Disconnected", "Disconnected successfully", Some("network-wireless-disconnected")),
+                Err(e) => send_notification("Wi-Fi Error", &format!("Disconnect failed: {}", e), Some("dialog-error")),
             }
         });
     });

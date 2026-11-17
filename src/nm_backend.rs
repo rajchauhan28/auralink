@@ -524,12 +524,51 @@ pub fn connect_to_wifi(ssid: &str, password: Option<&str>) -> bool {
     }
 }
 
-pub fn disconnect_wifi() -> bool {
-    Command::new("nmcli")
-        .args(["device", "disconnect", "wifi"])
+/// Wi-Fi interfaces NetworkManager has connected or is connecting, e.g. ["wlan0"].
+fn active_wifi_devices() -> Vec<String> {
+    let Ok(output) = Command::new("nmcli")
+        .args(["-t", "-f", "DEVICE,TYPE,STATE", "device"])
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(parse_nmcli_line)
+        // STATE is "connected", "connected (externally)", "connecting (...)".
+        .filter(|p| p.len() >= 3 && p[1] == "wifi" && p[2].starts_with("connect"))
+        .map(|p| p[0].clone())
+        .collect()
+}
+
+/// Disconnect every active Wi-Fi interface.
+///
+/// `nmcli device disconnect` takes an interface name. This used to pass the
+/// literal "wifi", which is a device TYPE, not a device -- nmcli answered
+/// "Device 'wifi' not found" and the disconnect never worked from either the
+/// GUI or the CLI. NetworkManager also keeps a device disconnected this way
+/// from auto-reconnecting until the user connects it again, which is the
+/// behaviour a manual disconnect wants.
+pub fn disconnect_wifi() -> Result<(), String> {
+    let devices = active_wifi_devices();
+    if devices.is_empty() {
+        return Err("No active Wi-Fi connection".to_string());
+    }
+    let failed: Vec<&String> = devices
+        .iter()
+        .filter(|dev| {
+            !Command::new("nmcli")
+                .args(["device", "disconnect", dev.as_str()])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        })
+        .collect();
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("Could not disconnect {}", failed.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")))
+    }
 }
 
 pub fn toggle_wifi_power(enabled: bool) -> bool {
