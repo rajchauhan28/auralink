@@ -1,6 +1,6 @@
 # Maintainer: rajchauhan28
 pkgname=auralink
-pkgver=0.1.7
+pkgver=0.1.8
 pkgrel=1
 pkgdesc="A blazing-fast, aesthetic Wi-Fi, VPN, and Bluetooth manager for Linux. Built with Rust and Slint, featuring live Pywal sync."
 arch=('x86_64')
