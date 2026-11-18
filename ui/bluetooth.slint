@@ -70,50 +70,183 @@ component ActionButton inherits Rectangle {
     }
 }
 
-component ThemeToggle inherits Rectangle {
-    in property <string> text;
-    in-out property <bool> checked;
+// A switch whose state belongs to its owner: a click only reports the
+// requested state. A switch that flips itself overwrites its binding to
+// window state, and after one click stops following the real adapter.
+component Switch inherits Rectangle {
+    in property <bool> checked;
+    in property <bool> enabled: true;
     callback toggled(bool);
 
+    // Outlined like the CONNECT/DISCONNECT buttons rather than a solid fill.
+    width: 38px;
+    height: 20px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: root.checked ? Palette.accent.with-alpha(0.7) : Palette.separator.brighter(30%);
+    background: root.checked ? Palette.accent.with-alpha(0.25) : Palette.foreground.with-alpha(0.06);
+    opacity: root.enabled ? 1.0 : 0.4;
+    animate background, border-color { duration: 200ms; }
+
+    Rectangle {
+        x: root.checked ? 21px : 3px;
+        y: 3px;
+        width: 14px;
+        height: 14px;
+        background: root.checked ? Palette.accent : Palette.secondary-fg;
+        border-radius: 7px;
+        animate x { duration: 200ms; easing: ease-in-out; }
+        animate background { duration: 200ms; }
+    }
+
+    TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { if (root.enabled) { root.toggled(!root.checked); } }
+    }
+}
+
+// One labelled switch in the settings panel.
+component SettingRow inherits HorizontalLayout {
+    in property <string> icon;
+    in property <string> text;
+    in property <bool> checked;
+    callback toggled(bool);
+
+    spacing: 10px;
     height: 28px;
-    
-    HorizontalLayout {
-        spacing: 12px;
-        alignment: start;
-        
-        VerticalLayout {
-            alignment: center;
-            Rectangle {
-                width: 40px;
-                height: 20px;
-                background: root.checked ? Palette.accent : Palette.foreground.with-alpha(0.1);
-                border-radius: 10px;
-                
-                Rectangle {
-                    x: root.checked ? 22px : 2px;
-                    y: 2px;
-                    width: 16px;
-                    height: 16px;
-                    background: white;
-                    border-radius: 8px;
-                    animate x { duration: 250ms; easing: ease-in-out; }
-                }
-            }
-        }
-        
-        if (root.text != "") : Text {
-            text: root.text;
-            color: Palette.foreground;
-            font-size: 13px;
-            font-weight: 500;
-            vertical-alignment: center;
+    Text {
+        text: root.icon;
+        width: 18px;
+        font-size: 14px;
+        color: Palette.secondary-fg;
+        vertical-alignment: center;
+    }
+    Text {
+        text: root.text;
+        horizontal-stretch: 1;
+        font-size: 12px;
+        font-weight: 700;
+        color: Palette.foreground;
+        vertical-alignment: center;
+    }
+    VerticalLayout {
+        alignment: center;
+        Switch {
+            checked: root.checked;
+            toggled(on) => { root.toggled(on); }
         }
     }
-    
-    TouchArea {
-        clicked => {
-            root.checked = !root.checked;
-            root.toggled(root.checked);
+}
+
+component HeaderButton inherits Rectangle {
+    in property <string> icon;
+    // Highlighted, e.g. while its panel is open.
+    in property <bool> active: false;
+    // Working: shown in the accent colour and ignores clicks.
+    in property <bool> busy: false;
+    callback clicked;
+
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: root.active ? Palette.accent.with-alpha(0.6) : Palette.separator;
+    background: root.active
+        ? Palette.accent.with-alpha(touch.has-hover ? 0.28 : 0.16)
+        : (touch.has-hover ? Palette.card-bg.brighter(20%) : Palette.card-bg);
+    animate background, border-color { duration: 150ms; }
+
+    Text {
+        text: root.icon;
+        font-size: 16px;
+        color: root.busy || root.active ? Palette.accent : Palette.foreground;
+    }
+    touch := TouchArea {
+        mouse-cursor: root.busy ? default : pointer;
+        clicked => { if (!root.busy) { root.clicked(); } }
+    }
+}
+
+// The adapter power control for the header: same footprint as the buttons
+// next to it, lit when on, dimmed and crossed out when off.
+component RadioButton inherits Rectangle {
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    in property <string> icon-on;
+    in property <string> icon-off;
+    callback toggled(bool);
+
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: root.checked ? Palette.accent.with-alpha(0.6) : Palette.separator;
+    background: root.checked
+        ? Palette.accent.with-alpha(touch.has-hover ? 0.28 : 0.16)
+        : (touch.has-hover && root.enabled ? Palette.card-bg.brighter(20%) : Palette.card-bg);
+    opacity: root.enabled ? 1.0 : 0.4;
+    animate background, border-color { duration: 150ms; }
+
+    Text {
+        text: root.checked ? root.icon-on : root.icon-off;
+        font-size: 16px;
+        color: root.checked ? Palette.accent : Palette.secondary-fg;
+    }
+    touch := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { if (root.enabled) { root.toggled(!root.checked); } }
+    }
+}
+
+// A full-width notice card with an optional action, for empty states.
+component NoticeCard inherits Rectangle {
+    in property <string> icon;
+    in property <string> title;
+    in property <string> detail;
+    in property <string> action: "";
+    callback action-clicked;
+
+    background: Palette.card-bg;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: Palette.separator;
+
+    HorizontalLayout {
+        padding: 12px;
+        spacing: 16px;
+        Text {
+            text: root.icon;
+            width: 32px;
+            font-size: 22px;
+            color: Palette.secondary-fg;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 4px;
+            horizontal-stretch: 1;
+            Text {
+                text: root.title;
+                font-size: 14px;
+                font-weight: 800;
+                color: Palette.foreground;
+            }
+            Text {
+                text: root.detail;
+                font-size: 10px;
+                font-weight: 700;
+                color: Palette.secondary-fg;
+                wrap: word-wrap;
+            }
+        }
+        if (root.action != "") : VerticalLayout {
+            alignment: center;
+            ActionButton {
+                text: root.action;
+                width: 90px;
+                clicked => { root.action-clicked(); }
+            }
         }
     }
 }
@@ -272,8 +405,11 @@ export component AppWindow inherits Window {
     in property <string> status_msg: "Ready";
     in property <bool> is_scanning: false;
     in property <bool> show_settings: false;
-    in property <bool> pywal_enabled: false;
-    in property <bool> bluetooth_enabled: true;
+    in-out property <bool> pywal_enabled: false;
+    // Adapter state, polled from BlueZ. The power switch sets it at once for
+    // feedback; the next poll corrects it if the change failed.
+    in-out property <bool> bluetooth_enabled: true;
+    in property <bool> has_adapter: true;
     in property <string> expanded_address: "";
 
     callback connect(string);
@@ -343,14 +479,55 @@ export component AppWindow inherits Window {
             HorizontalLayout {
                 alignment: end;
                 spacing: 8px;
-                
-                Rectangle {
-                    width: 32px;
-                    height: 32px;
-                    background: Palette.card-bg;
-                    border-radius: 8px;
-                    Text { text: "󰑐"; font-size: 16px; color: Palette.foreground; }
-                    TouchArea { clicked => { refresh(); } }
+
+                // Adapter power on/off.
+                RadioButton {
+                    checked: has_adapter && bluetooth_enabled;
+                    enabled: has_adapter;
+                    icon-on: "󰂯";
+                    icon-off: "󰂲";
+                    toggled(on) => {
+                        bluetooth_enabled = on;
+                        toggle_bluetooth(on);
+                    }
+                }
+                HeaderButton {
+                    icon: "󰑐";
+                    busy: is_scanning;
+                    clicked => { refresh(); }
+                }
+                HeaderButton {
+                    icon: "󰒓";
+                    active: show_settings;
+                    clicked => { toggle_settings(); }
+                }
+            }
+        }
+
+        if (show_settings) : Rectangle {
+            background: Palette.card-bg;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: Palette.separator;
+
+            VerticalLayout {
+                padding: 12px;
+                spacing: 6px;
+                Text {
+                    text: "SETTINGS";
+                    font-size: 10px;
+                    font-weight: 900;
+                    color: Palette.secondary-fg;
+                    letter-spacing: 2px;
+                }
+                SettingRow {
+                    icon: "󰏘";
+                    text: "Pywal Auto-Sync";
+                    checked: pywal_enabled;
+                    toggled(on) => {
+                        pywal_enabled = on;
+                        toggle_pywal(on);
+                    }
                 }
             }
         }
@@ -364,14 +541,39 @@ export component AppWindow inherits Window {
                 VerticalLayout {
                     spacing: 8px;
                     Text {
-                        text: "DISCOVERED DEVICES";
+                        text: "DEVICES";
                         font-size: 10px;
                         font-weight: 900;
                         color: Palette.secondary-fg;
                         letter-spacing: 2px;
                     }
 
-                    VerticalLayout {
+                    if (!has_adapter) : NoticeCard {
+                        icon: "󰂲";
+                        title: "No Bluetooth adapter";
+                        detail: "BlueZ reports no adapter. Check that bluetooth.service is running.";
+                    }
+
+                    if (has_adapter && !bluetooth_enabled) : NoticeCard {
+                        icon: "󰂲";
+                        title: "Bluetooth is off";
+                        detail: "Turn it on to see and connect devices";
+                        action: "TURN ON";
+                        action-clicked => {
+                            bluetooth_enabled = true;
+                            toggle_bluetooth(true);
+                        }
+                    }
+
+                    if (has_adapter && bluetooth_enabled && devices.length == 0) : Text {
+                        text: is_scanning ? "Searching for devices..." : "No devices yet. Press refresh to scan.";
+                        font-size: 11px;
+                        font-weight: 700;
+                        color: Palette.secondary-fg;
+                        wrap: word-wrap;
+                    }
+
+                    if (has_adapter && bluetooth_enabled) : VerticalLayout {
                         spacing: 8px;
                         for dev[idx] in devices : Rectangle {
                             background: dev.connected ? Palette.accent.with-alpha(0.1) : (touch.has-hover ? Palette.card-bg.brighter(10%) : Palette.card-bg);

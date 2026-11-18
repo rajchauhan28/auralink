@@ -1,4 +1,4 @@
-import { ScrollView, LineEdit, Button, CheckBox } from "std-widgets.slint";
+import { ScrollView, LineEdit, Button, CheckBox, ComboBox } from "std-widgets.slint";
 
 export struct WifiVpnItem {
     name: string,
@@ -76,20 +76,25 @@ component WifiThemeToggle inherits Rectangle {
         
         VerticalLayout {
             alignment: center;
+            // Same look as WifiSwitch.
             Rectangle {
-                width: 40px;
+                width: 38px;
                 height: 20px;
-                background: root.checked ? WifiPalette.accent : WifiPalette.foreground.with-alpha(0.1);
                 border-radius: 10px;
-                
+                border-width: 1px;
+                border-color: root.checked ? WifiPalette.accent.with-alpha(0.7) : WifiPalette.separator.brighter(30%);
+                background: root.checked ? WifiPalette.accent.with-alpha(0.25) : WifiPalette.foreground.with-alpha(0.06);
+                animate background, border-color { duration: 200ms; }
+
                 Rectangle {
-                    x: root.checked ? 22px : 2px;
-                    y: 2px;
-                    width: 16px;
-                    height: 16px;
-                    background: white;
-                    border-radius: 8px;
-                    animate x { duration: 250ms; easing: ease-in-out; }
+                    x: root.checked ? 21px : 3px;
+                    y: 3px;
+                    width: 14px;
+                    height: 14px;
+                    background: root.checked ? WifiPalette.accent : WifiPalette.secondary-fg;
+                    border-radius: 7px;
+                    animate x { duration: 200ms; easing: ease-in-out; }
+                    animate background { duration: 200ms; }
                 }
             }
         }
@@ -108,6 +113,134 @@ component WifiThemeToggle inherits Rectangle {
             root.checked = !root.checked;
             root.toggled(root.checked);
         }
+    }
+}
+
+// A switch whose state belongs to its owner: a click only reports the
+// requested state. WifiThemeToggle flips itself, which overwrites a binding to
+// window state, so after one click it stops following the real radio.
+component WifiSwitch inherits Rectangle {
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+
+    // Outlined like the CONNECT/DISCONNECT buttons rather than a solid fill.
+    width: 38px;
+    height: 20px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: root.checked ? WifiPalette.accent.with-alpha(0.7) : WifiPalette.separator.brighter(30%);
+    background: root.checked ? WifiPalette.accent.with-alpha(0.25) : WifiPalette.foreground.with-alpha(0.06);
+    opacity: root.enabled ? 1.0 : 0.4;
+    animate background, border-color { duration: 200ms; }
+
+    Rectangle {
+        x: root.checked ? 21px : 3px;
+        y: 3px;
+        width: 14px;
+        height: 14px;
+        background: root.checked ? WifiPalette.accent : WifiPalette.secondary-fg;
+        border-radius: 7px;
+        animate x { duration: 200ms; easing: ease-in-out; }
+        animate background { duration: 200ms; }
+    }
+
+    TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { if (root.enabled) { root.toggled(!root.checked); } }
+    }
+}
+
+// One labelled switch in the settings panel.
+component WifiSettingRow inherits HorizontalLayout {
+    in property <string> icon;
+    in property <string> text;
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+
+    spacing: 10px;
+    height: 28px;
+    Text {
+        text: root.icon;
+        width: 18px;
+        font-size: 14px;
+        color: WifiPalette.secondary-fg;
+        vertical-alignment: center;
+    }
+    Text {
+        text: root.text;
+        horizontal-stretch: 1;
+        font-size: 12px;
+        font-weight: 700;
+        color: WifiPalette.foreground;
+        vertical-alignment: center;
+    }
+    VerticalLayout {
+        alignment: center;
+        WifiSwitch {
+            checked: root.checked;
+            enabled: root.enabled;
+            toggled(on) => { root.toggled(on); }
+        }
+    }
+}
+
+component WifiHeaderButton inherits Rectangle {
+    in property <string> icon;
+    // Highlighted, e.g. while its panel is open.
+    in property <bool> active: false;
+    // Working: shown in the accent colour and ignores clicks.
+    in property <bool> busy: false;
+    callback clicked;
+
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: root.active ? WifiPalette.accent.with-alpha(0.6) : WifiPalette.separator;
+    background: root.active
+        ? WifiPalette.accent.with-alpha(touch.has-hover ? 0.28 : 0.16)
+        : (touch.has-hover ? WifiPalette.card-bg.brighter(20%) : WifiPalette.card-bg);
+    animate background, border-color { duration: 150ms; }
+
+    Text {
+        text: root.icon;
+        font-size: 16px;
+        color: root.busy || root.active ? WifiPalette.accent : WifiPalette.foreground;
+    }
+    touch := TouchArea {
+        mouse-cursor: root.busy ? default : pointer;
+        clicked => { if (!root.busy) { root.clicked(); } }
+    }
+}
+
+// A radio on/off control for the header: same footprint as the buttons next
+// to it, lit with the radio's icon when on, dimmed and crossed out when off.
+component WifiRadioButton inherits Rectangle {
+    in property <bool> checked;
+    in property <string> icon-on;
+    in property <string> icon-off;
+    callback toggled(bool);
+
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: root.checked ? WifiPalette.accent.with-alpha(0.6) : WifiPalette.separator;
+    background: root.checked
+        ? WifiPalette.accent.with-alpha(touch.has-hover ? 0.28 : 0.16)
+        : (touch.has-hover ? WifiPalette.card-bg.brighter(20%) : WifiPalette.card-bg);
+    animate background, border-color { duration: 150ms; }
+
+    Text {
+        text: root.checked ? root.icon-on : root.icon-off;
+        font-size: 16px;
+        color: root.checked ? WifiPalette.accent : WifiPalette.secondary-fg;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(!root.checked); }
     }
 }
 
@@ -228,9 +361,16 @@ export component WifiWindow inherits Window {
     in property <string> status_msg: "Ready";
     in property <bool> is_connecting: false;
     in property <bool> show_settings: false;
-    in property <bool> pywal_enabled: false;
+    in-out property <bool> pywal_enabled: false;
+    // Radio state, polled from the system. The switches set these at once
+    // for feedback; the next poll corrects them if the change failed.
     in-out property <bool> airplane_mode: false;
-    
+    in-out property <bool> wifi_enabled: true;
+    in-out property <bool> bluetooth_enabled: true;
+    in property <bool> has_bluetooth: true;
+    // A fresh Wi-Fi scan is running.
+    in property <bool> is_scanning: false;
+
     in property <[float]> download_history;
     in property <[float]> upload_history;
     in property <float> max_speed: 1.0;
@@ -262,6 +402,8 @@ export component WifiWindow inherits Window {
     callback toggle_settings();
     callback toggle_pywal(bool);
     callback toggle_airplane_mode(bool);
+    callback toggle_wifi(bool);
+    callback toggle_bluetooth(bool);
     callback open_nmtui();
     callback expand_network(string);
     callback toggle_vpn(string, string, bool);
@@ -306,6 +448,15 @@ export component WifiWindow inherits Window {
     property <string> password_ssid: "";
     property <string> password_input: "";
 
+    // Positions in the Advanced dialog's method lists (NetworkManager's
+    // ipv4.method / ipv6.method values). Unknown values show as "auto".
+    pure function ipv4-method-index(m: string) -> int {
+        m == "manual" ? 1 : m == "link-local" ? 2 : m == "shared" ? 3 : m == "disabled" ? 4 : 0
+    }
+    pure function ipv6-method-index(m: string) -> int {
+        m == "dhcp" ? 1 : m == "manual" ? 2 : m == "ignore" ? 3 : m == "link-local" ? 4 : m == "disabled" ? 5 : 0
+    }
+
     // Overlay handler
     TouchArea {
         width: 100%; height: 100%;
@@ -345,14 +496,89 @@ export component WifiWindow inherits Window {
             HorizontalLayout {
                 alignment: end;
                 spacing: 8px;
-                
-                Rectangle {
-                    width: 32px;
-                    height: 32px;
-                    background: WifiPalette.card-bg;
-                    border-radius: 8px;
-                    Text { text: "󰑐"; font-size: 16px; color: WifiPalette.foreground; }
-                    TouchArea { clicked => { refresh(); } }
+
+                // Wi-Fi radio on/off.
+                WifiRadioButton {
+                    checked: wifi_enabled;
+                    icon-on: "󰖩";
+                    icon-off: "󰖪";
+                    toggled(on) => {
+                        wifi_enabled = on;
+                        toggle_wifi(on);
+                    }
+                }
+                WifiHeaderButton {
+                    icon: "󰑐";
+                    busy: is_scanning;
+                    clicked => { refresh(); }
+                }
+                WifiHeaderButton {
+                    icon: "󰒓";
+                    active: show_settings;
+                    clicked => { toggle_settings(); }
+                }
+            }
+        }
+
+        if (show_settings) : Rectangle {
+            background: WifiPalette.card-bg;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: WifiPalette.separator;
+
+            VerticalLayout {
+                padding: 12px;
+                spacing: 6px;
+
+                Text {
+                    text: "QUICK SETTINGS";
+                    font-size: 10px;
+                    font-weight: 900;
+                    color: WifiPalette.secondary-fg;
+                    letter-spacing: 2px;
+                }
+                if (has_bluetooth) : WifiSettingRow {
+                    icon: "󰂯";
+                    text: "Bluetooth";
+                    checked: bluetooth_enabled;
+                    toggled(on) => {
+                        bluetooth_enabled = on;
+                        toggle_bluetooth(on);
+                    }
+                }
+                WifiSettingRow {
+                    icon: "󰀝";
+                    text: "Airplane Mode";
+                    checked: airplane_mode;
+                    toggled(on) => {
+                        airplane_mode = on;
+                        wifi_enabled = !on;
+                        bluetooth_enabled = !on;
+                        toggle_airplane_mode(on);
+                    }
+                }
+                WifiSettingRow {
+                    icon: "󰏘";
+                    text: "Pywal Auto-Sync";
+                    checked: pywal_enabled;
+                    toggled(on) => {
+                        pywal_enabled = on;
+                        toggle_pywal(on);
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    padding-top: 6px;
+                    WifiActionButton {
+                        text: "IMPORT VPN";
+                        primary: false;
+                        clicked => { import_vpn(); }
+                    }
+                    WifiActionButton {
+                        text: "OPEN NMTUI";
+                        primary: false;
+                        clicked => { open_nmtui(); }
+                    }
                 }
             }
         }
@@ -371,6 +597,62 @@ export component WifiWindow inherits Window {
                         font-weight: 900;
                         color: WifiPalette.secondary-fg;
                         letter-spacing: 2px;
+                    }
+
+                    if (!wifi_enabled) : Rectangle {
+                        background: WifiPalette.card-bg;
+                        border-radius: 6px;
+                        border-width: 1px;
+                        border-color: WifiPalette.separator;
+
+                        HorizontalLayout {
+                            padding: 12px;
+                            spacing: 16px;
+                            Text {
+                                text: "󰖪";
+                                width: 32px;
+                                font-size: 22px;
+                                color: WifiPalette.secondary-fg;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 4px;
+                                horizontal-stretch: 1;
+                                Text {
+                                    text: "Wi-Fi is off";
+                                    font-size: 14px;
+                                    font-weight: 800;
+                                    color: WifiPalette.foreground;
+                                }
+                                Text {
+                                    text: airplane_mode ? "Airplane mode is on" : "Turn it on to see networks";
+                                    font-size: 10px;
+                                    font-weight: 700;
+                                    color: WifiPalette.secondary-fg;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                WifiActionButton {
+                                    text: "TURN ON";
+                                    width: 90px;
+                                    clicked => {
+                                        wifi_enabled = true;
+                                        toggle_wifi(true);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (wifi_enabled && networks.length == 0) : Text {
+                        text: is_scanning ? "Scanning for networks..." : "No networks found. Press refresh to scan again.";
+                        font-size: 11px;
+                        font-weight: 700;
+                        color: WifiPalette.secondary-fg;
+                        wrap: word-wrap;
                     }
 
                     VerticalLayout {
@@ -757,10 +1039,10 @@ export component WifiWindow inherits Window {
                         VerticalLayout {
                             spacing: 4px;
                             FormLabel { text: "Method"; }
-                            LineEdit {
-                                text: config_ipv4_method;
-                                placeholder-text: "auto, manual, disabled";
-                                edited(t) => { config_ipv4_method = t; }
+                            ComboBox {
+                                model: ["auto", "manual", "link-local", "shared", "disabled"];
+                                current-index: ipv4-method-index(config_ipv4_method);
+                                selected(m) => { config_ipv4_method = m; }
                             }
                         }
 
@@ -802,10 +1084,10 @@ export component WifiWindow inherits Window {
                         VerticalLayout {
                             spacing: 4px;
                             FormLabel { text: "Method"; }
-                            LineEdit {
-                                text: config_ipv6_method;
-                                placeholder-text: "auto, manual, ignore";
-                                edited(t) => { config_ipv6_method = t; }
+                            ComboBox {
+                                model: ["auto", "dhcp", "manual", "ignore", "link-local", "disabled"];
+                                current-index: ipv6-method-index(config_ipv6_method);
+                                selected(m) => { config_ipv6_method = m; }
                             }
                         }
 

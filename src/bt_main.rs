@@ -14,6 +14,16 @@ mod ui {
 use ui::*;
 
 const CONFIG_FILE: &str = "bt_config.json";
+/// How often the device list is re-read from BlueZ.
+const LIST_EVERY: Duration = Duration::from_secs(5);
+
+/// Wake the list thread to re-read devices after an action changed them, so
+/// the window does not lag up to LIST_EVERY behind what the user just did.
+static RELIST_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+fn request_relist() {
+    RELIST_REQUESTED.store(true, Ordering::SeqCst);
+}
 
 fn notify(summary: &str, body: &str, icon: Option<&str>) {
     common::send_notification("AuraLink BT", summary, body, icon);
@@ -284,12 +294,16 @@ fn main() -> Result<(), slint::PlatformError> {
     main_window.on_toggle_bluetooth(move |enabled| {
         let ww = window_weak.clone();
         std::thread::spawn(move || {
-            if let Err(e) = bt_backend::set_power(enabled) {
-                set_status(
-                    &ww,
-                    format!("Power {} failed: {}", if enabled { "on" } else { "off" }, e),
-                );
+            let state = if enabled { "on" } else { "off" };
+            if !enabled {
+                // Discovery dies with the adapter; drop our bluetoothctl child too.
+                bt_backend::stop_scan();
             }
+            match bt_backend::set_power(enabled) {
+                Ok(()) => set_status(&ww, format!("Bluetooth {}", state)),
+                Err(e) => set_status(&ww, format!("Could not turn Bluetooth {}: {}", state, e)),
+            }
+            request_relist();
         });
     });
 
@@ -298,22 +312,26 @@ fn main() -> Result<(), slint::PlatformError> {
         let address = address.to_string();
         let ww = window_weak.clone();
         set_status(&ww, format!("Connecting to {}...", address));
-        std::thread::spawn(move || match autoconnect::manual_connect(&address) {
-            Ok(()) => {
-                set_status(&ww, format!("Connected to {}", address));
-                notify(
-                    "Bluetooth Connected",
-                    &format!("Connected to {}", address),
-                    Some("bluetooth-active"),
-                );
-            }
-            Err(e) => {
-                set_status(&ww, format!("Connect failed: {}", e));
-                notify(
-                    "Bluetooth Connection Error",
-                    &format!("Failed to connect to {}: {}", address, e),
-                    Some("dialog-error"),
-                );
+        std::thread::spawn(move || {
+            let result = autoconnect::manual_connect(&address);
+            request_relist();
+            match result {
+                Ok(()) => {
+                    set_status(&ww, format!("Connected to {}", address));
+                    notify(
+                        "Bluetooth Connected",
+                        &format!("Connected to {}", address),
+                        Some("bluetooth-active"),
+                    );
+                }
+                Err(e) => {
+                    set_status(&ww, format!("Connect failed: {}", e));
+                    notify(
+                        "Bluetooth Connection Error",
+                        &format!("Failed to connect to {}: {}", address, e),
+                        Some("dialog-error"),
+                    );
+                }
             }
         });
     });
@@ -322,22 +340,26 @@ fn main() -> Result<(), slint::PlatformError> {
     main_window.on_disconnect(move |address| {
         let address = address.to_string();
         let ww = window_weak.clone();
-        std::thread::spawn(move || match autoconnect::manual_disconnect(&address) {
-            Ok(()) => {
-                set_status(&ww, format!("Disconnected {}", address));
-                notify(
-                    "Bluetooth Disconnected",
-                    &format!("Disconnected {}", address),
-                    Some("bluetooth-disabled"),
-                );
-            }
-            Err(e) => {
-                set_status(&ww, format!("Disconnect failed: {}", e));
-                notify(
-                    "Bluetooth Error",
-                    &format!("Failed to disconnect {}: {}", address, e),
-                    Some("dialog-error"),
-                );
+        std::thread::spawn(move || {
+            let result = autoconnect::manual_disconnect(&address);
+            request_relist();
+            match result {
+                Ok(()) => {
+                    set_status(&ww, format!("Disconnected {}", address));
+                    notify(
+                        "Bluetooth Disconnected",
+                        &format!("Disconnected {}", address),
+                        Some("bluetooth-disabled"),
+                    );
+                }
+                Err(e) => {
+                    set_status(&ww, format!("Disconnect failed: {}", e));
+                    notify(
+                        "Bluetooth Error",
+                        &format!("Failed to disconnect {}: {}", address, e),
+                        Some("dialog-error"),
+                    );
+                }
             }
         });
     });
@@ -356,6 +378,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 Err(e) => format!("Trust change failed for {}: {}", address, e),
             };
             set_status(&ww, msg);
+            request_relist();
         });
     });
 
@@ -370,6 +393,7 @@ fn main() -> Result<(), slint::PlatformError> {
             } else {
                 bt_backend::remove(&address)
             };
+            request_relist();
             let verb = if pair { "Paired" } else { "Removed" };
             set_status(
                 &ww,
@@ -395,6 +419,7 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Err(e) = bt_backend::remove(&address) {
                 set_status(&ww, format!("Remove failed for {}: {}", address, e));
             }
+            request_relist();
         });
     });
 
@@ -405,6 +430,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let ww = window_weak.clone();
         std::thread::spawn(move || {
             let ok = bt_backend::set_audio_profile(&address, &profile);
+            request_relist();
             set_status(
                 &ww,
                 if ok {
@@ -477,18 +503,25 @@ fn main() -> Result<(), slint::PlatformError> {
     let window_weak = main_window.as_weak();
     std::thread::spawn(move || {
         loop {
+            RELIST_REQUESTED.store(false, Ordering::SeqCst);
             let snap = bt_backend::Snapshot::read().with_audio_profiles();
             let powered = snap.powered();
+            let has_adapter = !snap.adapters.is_empty();
             let devices = snap.devices;
             let ww = window_weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ww.upgrade() {
                     let items: Vec<BluetoothDevice> = devices.into_iter().map(to_slint).collect();
                     ui.set_devices(ModelRc::new(VecModel::from(items)));
+                    ui.set_has_adapter(has_adapter);
                     ui.set_bluetooth_enabled(powered);
                 }
             });
-            std::thread::sleep(Duration::from_secs(5));
+            // Sleep, waking early after an action.
+            let until = std::time::Instant::now() + LIST_EVERY;
+            while std::time::Instant::now() < until && !RELIST_REQUESTED.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(100));
+            }
         }
     });
 
@@ -511,6 +544,7 @@ fn discover_devices(window: slint::Weak<AppWindow>, power_on: bool) {
     });
     if power_on && !bt_backend::is_powered() {
         let _ = bt_backend::set_power(true);
+        request_relist();
     }
     bt_backend::start_scan();
     std::thread::sleep(Duration::from_secs(15));

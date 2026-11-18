@@ -24,6 +24,17 @@ const RESCAN_EVERY: Duration = Duration::from_secs(60);
 /// How often the network and VPN lists are re-read from NetworkManager.
 const LIST_EVERY: Duration = Duration::from_secs(10);
 
+/// Wake the list thread for a fresh Wi-Fi scan (the refresh button).
+static RESCAN_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// Wake the list thread to re-read the lists and radio state from cache,
+/// after an action changed them, so the window does not lag up to
+/// LIST_EVERY behind what the user just did.
+static RELIST_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+fn request_relist() {
+    RELIST_REQUESTED.store(true, Ordering::SeqCst);
+}
+
 fn notify(summary: &str, body: &str, icon: Option<&str>) {
     common::send_notification("AuraLink", summary, body, icon);
 }
@@ -211,8 +222,56 @@ fn network_item(n: nm_backend::Network) -> WifiNetworkItem {
     }
 }
 
+/// Which radios are on. Airplane mode is "everything off", not a separate
+/// switch in the system, so it is derived rather than stored.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Radios {
+    wifi: bool,
+    has_bluetooth: bool,
+    bluetooth: bool,
+}
+
+impl Radios {
+    fn read() -> Self {
+        let bt = bt_backend::Snapshot::read();
+        Radios {
+            wifi: nm_backend::is_wifi_enabled(),
+            has_bluetooth: !bt.adapters.is_empty(),
+            bluetooth: bt.powered(),
+        }
+    }
+
+    fn airplane_mode(self) -> bool {
+        !self.wifi && !(self.has_bluetooth && self.bluetooth)
+    }
+}
+
+/// Read the radio state (blocking) and hand it to the window.
+fn publish_radios(window: &slint::Weak<WifiWindow>) -> Radios {
+    let radios = Radios::read();
+    let ww = window.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(ui) = ww.upgrade() {
+            ui.set_wifi_enabled(radios.wifi);
+            ui.set_has_bluetooth(radios.has_bluetooth);
+            ui.set_bluetooth_enabled(radios.bluetooth);
+            ui.set_airplane_mode(radios.airplane_mode());
+        }
+    });
+    radios
+}
+
 /// Read the network and VPN lists (blocking) and hand them to the window.
 fn publish_networks(window: &slint::Weak<WifiWindow>, rescan: Rescan) {
+    let scanning = rescan == Rescan::Fresh;
+    if scanning {
+        let ww = window.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = ww.upgrade() {
+                ui.set_is_scanning(true);
+            }
+        });
+    }
     let (mut networks, vpns) = nm_backend::list_networks_and_vpns(rescan);
     for net in networks.iter_mut().filter(|n| n.connected) {
         net.ping = nm_backend::get_ping("8.8.8.8");
@@ -231,8 +290,80 @@ fn publish_networks(window: &slint::Weak<WifiWindow>, rescan: Rescan) {
                 .collect();
             ui.set_networks(ModelRc::new(VecModel::from(items)));
             ui.set_vpns(ModelRc::new(VecModel::from(vpn_items)));
+            if scanning {
+                ui.set_is_scanning(false);
+            }
         }
     });
+}
+
+/// How a terminal emulator takes the command to run.
+const TERMINALS: &[(&str, &[&str])] = &[
+    ("xdg-terminal-exec", &[]),
+    ("kitty", &[]),
+    ("foot", &[]),
+    ("ghostty", &["-e"]),
+    ("alacritty", &["-e"]),
+    ("wezterm", &["start", "--"]),
+    ("konsole", &["-e"]),
+    ("gnome-terminal", &["--"]),
+    ("xfce4-terminal", &["-x"]),
+    ("xterm", &["-e"]),
+];
+
+/// Choose a terminal: `$TERMINAL` when it is installed, else the first known
+/// one that is. Returns the program and the arguments that precede the
+/// command.
+fn pick_terminal(
+    preferred: Option<&str>,
+    installed: impl Fn(&str) -> bool,
+) -> Option<(String, &'static [&'static str])> {
+    let args_for = |program: &str| {
+        let name = std::path::Path::new(program)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(program);
+        TERMINALS
+            .iter()
+            .find(|(t, _)| *t == name)
+            .map_or(&["-e"][..], |(_, a)| *a)
+    };
+    preferred
+        .filter(|t| !t.is_empty() && installed(t))
+        .map(|t| (t.to_string(), args_for(t)))
+        .or_else(|| {
+            TERMINALS
+                .iter()
+                .find(|(t, _)| installed(t))
+                .map(|(t, a)| (t.to_string(), *a))
+        })
+}
+
+fn on_path(program: &str) -> bool {
+    if program.contains('/') {
+        return std::path::Path::new(program).is_file();
+    }
+    std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|dir| dir.join(program).is_file()))
+}
+
+/// Run a terminal program such as nmtui in a terminal emulator. A GUI has no
+/// terminal of its own: spawning nmtui directly (the old "Advanced Editor"
+/// button) did nothing visible.
+fn open_in_terminal(command: &str) -> Result<(), String> {
+    let preferred = std::env::var("TERMINAL").ok();
+    let (term, args) = pick_terminal(preferred.as_deref(), on_path)
+        .ok_or("no terminal emulator found; set $TERMINAL")?;
+    let mut child = std::process::Command::new(&term)
+        .args(args)
+        .arg(command)
+        .spawn()
+        .map_err(|e| format!("{}: {}", term, e))?;
+    // Reap it when it exits so it does not linger as a zombie.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -251,7 +382,6 @@ fn main() -> Result<(), slint::PlatformError> {
     let _ = slint::set_xdg_app_id("auralink");
     let config = AppConfig::load(CONFIG_FILE);
     let pywal_enabled = Arc::new(AtomicBool::new(config.pywal_enabled));
-    let force_refresh = Arc::new(AtomicBool::new(false));
 
     main_window.set_pywal_enabled(config.pywal_enabled);
     if config.pywal_enabled
@@ -260,8 +390,7 @@ fn main() -> Result<(), slint::PlatformError> {
         set_palette(&main_window, &theme);
     }
 
-    let fr = force_refresh.clone();
-    main_window.on_refresh(move || fr.store(true, Ordering::SeqCst));
+    main_window.on_refresh(|| RESCAN_REQUESTED.store(true, Ordering::SeqCst));
 
     let window_weak = main_window.as_weak();
     let pw = pywal_enabled.clone();
@@ -290,30 +419,70 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
-    // Declared by the UI but not currently wired to any control.
-    main_window.on_open_nmtui(|| {});
+    let window_weak = main_window.as_weak();
+    main_window.on_open_nmtui(move || {
+        if let Err(e) = open_in_terminal("nmtui") {
+            set_status(&window_weak, format!("Cannot open nmtui: {}", e));
+        }
+    });
+
+    let window_weak = main_window.as_weak();
+    main_window.on_toggle_wifi(move |on| {
+        let ww = window_weak.clone();
+        std::thread::spawn(move || {
+            let state = if on { "on" } else { "off" };
+            if nm_backend::toggle_wifi_power(on) {
+                set_status(&ww, format!("Wi-Fi {}", state));
+            } else {
+                set_status(&ww, format!("Could not turn Wi-Fi {}", state));
+            }
+            request_relist();
+            if on {
+                // The radio takes a few seconds to come up and accept a scan.
+                std::thread::sleep(Duration::from_secs(4));
+                RESCAN_REQUESTED.store(true, Ordering::SeqCst);
+            }
+        });
+    });
+
+    let window_weak = main_window.as_weak();
+    main_window.on_toggle_bluetooth(move |on| {
+        let ww = window_weak.clone();
+        std::thread::spawn(move || {
+            let state = if on { "on" } else { "off" };
+            match bt_backend::set_power(on) {
+                Ok(()) => set_status(&ww, format!("Bluetooth {}", state)),
+                Err(e) => set_status(&ww, format!("Could not turn Bluetooth {}: {}", state, e)),
+            }
+            request_relist();
+        });
+    });
 
     let window_weak = main_window.as_weak();
     main_window.on_disconnect(move || {
         let ww = window_weak.clone();
         // nmcli runs on the worker thread; calling it on the UI thread froze
         // the window until NetworkManager answered.
-        std::thread::spawn(move || match nm_backend::disconnect_wifi() {
-            Ok(()) => {
-                set_status(&ww, "Disconnected".to_string());
-                notify(
-                    "Wi-Fi Disconnected",
-                    "Disconnected successfully",
-                    Some("network-wireless-disconnected"),
-                );
-            }
-            Err(e) => {
-                set_status(&ww, format!("Disconnect failed: {}", e));
-                notify(
-                    "Wi-Fi Error",
-                    &format!("Disconnect failed: {}", e),
-                    Some("dialog-error"),
-                );
+        std::thread::spawn(move || {
+            let result = nm_backend::disconnect_wifi();
+            request_relist();
+            match result {
+                Ok(()) => {
+                    set_status(&ww, "Disconnected".to_string());
+                    notify(
+                        "Wi-Fi Disconnected",
+                        "Disconnected successfully",
+                        Some("network-wireless-disconnected"),
+                    );
+                }
+                Err(e) => {
+                    set_status(&ww, format!("Disconnect failed: {}", e));
+                    notify(
+                        "Wi-Fi Error",
+                        &format!("Disconnect failed: {}", e),
+                        Some("dialog-error"),
+                    );
+                }
             }
         });
     });
@@ -323,7 +492,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let ssid = ssid.to_string();
         let ww = window_weak.clone();
         std::thread::spawn(move || {
-            if nm_backend::forget_network(&ssid) {
+            let forgot = nm_backend::forget_network(&ssid);
+            request_relist();
+            if forgot {
                 set_status(&ww, format!("Forgot {}", ssid));
                 notify(
                     "Wi-Fi Network",
@@ -403,8 +574,10 @@ fn main() -> Result<(), slint::PlatformError> {
                 password: pass.to_string(),
             };
             let ww = window_weak.clone();
-            std::thread::spawn(
-                move || match nm_backend::update_network_config(&ssid, config) {
+            std::thread::spawn(move || {
+                let result = nm_backend::update_network_config(&ssid, config);
+                request_relist();
+                match result {
                     Ok(()) => {
                         set_status(&ww, "Settings saved".to_string());
                         notify(
@@ -421,8 +594,8 @@ fn main() -> Result<(), slint::PlatformError> {
                             Some("dialog-error"),
                         );
                     }
-                },
-            );
+                }
+            });
         },
     );
 
@@ -446,6 +619,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let ww = window_weak.clone();
         std::thread::spawn(move || {
             let result = nm_backend::connect_to_wifi(&ssid, password.as_deref());
+            request_relist();
             let msg = match &result {
                 Ok(()) => format!("Connected to {}", ssid),
                 Err(e) => format!("Failed: {}", e),
@@ -478,7 +652,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let vtype = vtype.to_string();
         let ww = window_weak.clone();
         std::thread::spawn(move || {
-            if nm_backend::toggle_vpn(&name, &vtype, active) {
+            let ok = nm_backend::toggle_vpn(&name, &vtype, active);
+            // The switch flipped itself; the relist puts it back if this failed.
+            request_relist();
+            if ok {
                 notify(
                     "VPN Status",
                     &format!("VPN {} toggled {}", name, if active { "ON" } else { "OFF" }),
@@ -502,6 +679,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let wifi_ok = nm_backend::toggle_wifi_power(!enabled);
             // A machine without Bluetooth has nothing to switch.
             let bt_ok = bt_backend::set_power(!enabled).is_ok() || !bt_backend::has_adapter();
+            request_relist();
             let state = if enabled { "ON" } else { "OFF" };
             // Both radios have to follow; "either one" reported a half-applied
             // airplane mode as success.
@@ -530,37 +708,49 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let window_weak = main_window.as_weak();
     main_window.on_import_vpn(move || {
-        if let Some(file) = FileDialog::new()
-            .add_filter("VPN Config", &["conf", "ovpn"])
-            .pick_file()
-        {
-            let path = file.display().to_string();
-            let ww = window_weak.clone();
-            std::thread::spawn(move || {
-                let ok = nm_backend::import_vpn(&path);
-                set_status(
-                    &ww,
-                    if ok { "VPN Imported" } else { "Import Failed" }.to_string(),
-                );
-            });
-        }
+        let ww = window_weak.clone();
+        // The picker blocks until the user chooses; on the UI thread that
+        // froze the window. rfd's portal backend works from any thread.
+        std::thread::spawn(move || {
+            let Some(file) = FileDialog::new()
+                .add_filter("VPN Config", &["conf", "ovpn"])
+                .pick_file()
+            else {
+                return;
+            };
+            let name = file
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if nm_backend::import_vpn(&file.display().to_string()) {
+                set_status(&ww, format!("Imported {}", name));
+                request_relist();
+            } else {
+                set_status(&ww, format!("Could not import {}", name));
+            }
+        });
     });
 
     // Network and VPN lists.
     let window_weak = main_window.as_weak();
-    let fr = force_refresh.clone();
     std::thread::spawn(move || {
         // Show the cached list at once; it can be minutes stale (after a
         // resume or a move it may hold only the network in use), so follow
         // it with a fresh scan. Rescan again every RESCAN_EVERY and when the
         // user refreshes. A fresh scan blocks for seconds, hence this thread.
+        publish_radios(&window_weak);
         publish_networks(&window_weak, Rescan::Cached);
         let mut last_rescan: Option<Instant> = None;
         loop {
-            // swap() first: behind a short-circuiting || it would leave a
-            // pending refresh set and rescan twice.
-            let forced = fr.swap(false, Ordering::SeqCst);
-            let rescan = if forced || last_rescan.is_none_or(|t| t.elapsed() >= RESCAN_EVERY) {
+            // swap() both first: behind a short-circuiting || a request could
+            // stay set and run the loop twice.
+            let forced = RESCAN_REQUESTED.swap(false, Ordering::SeqCst);
+            RELIST_REQUESTED.store(false, Ordering::SeqCst);
+            let radios = publish_radios(&window_weak);
+            let due = forced || last_rescan.is_none_or(|t| t.elapsed() >= RESCAN_EVERY);
+            // Scanning with the radio off fails anyway; leave that for the
+            // first pass after it is switched back on.
+            let rescan = if due && radios.wifi {
                 last_rescan = Some(Instant::now());
                 Rescan::Fresh
             } else {
@@ -568,9 +758,12 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             publish_networks(&window_weak, rescan);
 
-            // Sleep, waking early if the user hits refresh.
+            // Sleep, waking early for a refresh or after an action.
             let until = Instant::now() + LIST_EVERY;
-            while Instant::now() < until && !fr.load(Ordering::SeqCst) {
+            while Instant::now() < until
+                && !RESCAN_REQUESTED.load(Ordering::SeqCst)
+                && !RELIST_REQUESTED.load(Ordering::SeqCst)
+            {
                 std::thread::sleep(Duration::from_millis(100));
             }
         }
@@ -675,5 +868,44 @@ mod tests {
             handle_commands(&args(&["auralink", "connect"])),
             Some(Err(_))
         ));
+    }
+
+    #[test]
+    fn terminal_prefers_an_installed_terminal_env() {
+        let installed = |t: &str| matches!(t, "kitty" | "alacritty" | "/opt/bin/ghostty");
+        // $TERMINAL wins when it is installed, with its own argument style.
+        assert_eq!(
+            pick_terminal(Some("alacritty"), installed),
+            Some(("alacritty".to_string(), &["-e"][..]))
+        );
+        assert_eq!(
+            pick_terminal(Some("/opt/bin/ghostty"), installed),
+            Some(("/opt/bin/ghostty".to_string(), &["-e"][..]))
+        );
+        // A stale $TERMINAL (here: not installed) falls back to the list.
+        assert_eq!(
+            pick_terminal(Some("wezterm"), installed),
+            Some(("kitty".to_string(), &[][..]))
+        );
+        assert_eq!(
+            pick_terminal(None, installed),
+            Some(("kitty".to_string(), &[][..]))
+        );
+        assert_eq!(pick_terminal(Some("kitty"), |_| false), None);
+    }
+
+    #[test]
+    fn airplane_mode_means_every_radio_off() {
+        let r = |wifi, has_bluetooth, bluetooth| Radios {
+            wifi,
+            has_bluetooth,
+            bluetooth,
+        };
+        assert!(r(false, true, false).airplane_mode());
+        assert!(!r(true, true, false).airplane_mode());
+        assert!(!r(false, true, true).airplane_mode());
+        // No Bluetooth hardware: Wi-Fi alone decides.
+        assert!(r(false, false, false).airplane_mode());
+        assert!(!r(true, false, false).airplane_mode());
     }
 }

@@ -125,18 +125,73 @@ impl Theme {
         let bg = pick(&wal.special, "background", d.background);
         let fg = pick(&wal.special, "foreground", d.foreground);
         let lift = |c: u8| c.saturating_add(15);
+        let card_bg = Color::from_rgb_u8(lift(bg.red()), lift(bg.green()), lift(bg.blue()));
+        // Accent and danger colour text and thin outlines, so they need text
+        // contrast against the cards they sit on. pywal's color1 is often a
+        // dim shade of the wallpaper (2.2:1 on one real palette), which made
+        // the title, buttons and switches hard to see.
+        let readable = |c: Color| with_contrast(c, card_bg, 4.5);
         Some(Theme {
             // Translucent background for the glass effect.
             background: Color::from_argb_u8(0x88, bg.red(), bg.green(), bg.blue()),
-            card_bg: Color::from_rgb_u8(lift(bg.red()), lift(bg.green()), lift(bg.blue())),
-            accent: pick(&wal.colors, "color1", d.accent),
+            card_bg,
+            accent: readable(pick(&wal.colors, "color1", d.accent)),
             foreground: fg,
             secondary_fg: Color::from_argb_u8(180, fg.red(), fg.green(), fg.blue()),
             separator: Color::from_argb_u8(60, fg.red(), fg.green(), fg.blue()),
-            danger: pick(&wal.colors, "color5", d.danger),
-            upload: pick(&wal.colors, "color2", d.upload),
+            danger: readable(pick(&wal.colors, "color5", d.danger)),
+            upload: with_contrast(pick(&wal.colors, "color2", d.upload), card_bg, 3.0),
         })
     }
+}
+
+/// WCAG relative luminance of an opaque colour.
+fn luminance(c: Color) -> f32 {
+    let lin = |v: u8| {
+        let v = v as f32 / 255.0;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(c.red()) + 0.7152 * lin(c.green()) + 0.0722 * lin(c.blue())
+}
+
+/// WCAG contrast ratio between two opaque colours (1 to 21).
+fn contrast(a: Color, b: Color) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// `c`, brightened (on a dark background) or darkened (on a light one) just
+/// enough to reach `min` contrast against `bg`. The hue is kept; saturation
+/// gives way only once brightness is exhausted.
+fn with_contrast(c: Color, bg: Color, min: f32) -> Color {
+    let dark_bg = luminance(bg) < 0.5;
+    let hsv = c.to_hsva();
+    let (mut s, mut v) = (hsv.saturation, hsv.value);
+    let mut out = c;
+    for _ in 0..100 {
+        if contrast(out, bg) >= min {
+            break;
+        }
+        if dark_bg {
+            if v < 1.0 {
+                v = (v + 0.02).min(1.0);
+            } else if s > 0.0 {
+                s = (s - 0.04).max(0.0);
+            } else {
+                break;
+            }
+        } else if v > 0.0 {
+            v = (v - 0.02).max(0.0);
+        } else {
+            break;
+        }
+        out = Color::from_hsva(hsv.hue, s, v, 1.0);
+    }
+    out
 }
 
 pub fn pywal_colors_path() -> PathBuf {
@@ -205,14 +260,46 @@ mod tests {
     #[test]
     fn pywal_theme_uses_colors_and_falls_back() {
         let json = r##"{"special":{"background":"#000000","foreground":"#ffffff"},
-                        "colors":{"color1":"#112233"}}"##;
+                        "colors":{"color1":"#33ccff"}}"##;
         let t = Theme::from_pywal_json(json).unwrap();
         assert_eq!(t.background, Color::from_argb_u8(0x88, 0, 0, 0));
         assert_eq!(t.card_bg, Color::from_rgb_u8(15, 15, 15));
-        assert_eq!(t.accent, Color::from_rgb_u8(0x11, 0x22, 0x33));
+        // Readable already, so used as is.
+        assert_eq!(t.accent, Color::from_rgb_u8(0x33, 0xcc, 0xff));
         // color5 missing -> default danger.
         assert_eq!(t.danger, Theme::default_dark().danger);
         assert!(Theme::from_pywal_json("not json").is_none());
+    }
+
+    #[test]
+    fn dim_pywal_accents_are_brightened_to_text_contrast() {
+        // A real palette: color1 was 2.2:1 against the background.
+        let json = r##"{"special":{"background":"#150a09","foreground":"#c4c1c1"},
+                        "colors":{"color1":"#6E3941","color2":"#704E42","color5":"#D72C17"}}"##;
+        let t = Theme::from_pywal_json(json).unwrap();
+        assert!(contrast(t.accent, t.card_bg) >= 4.5);
+        assert!(contrast(t.danger, t.card_bg) >= 4.5);
+        assert!(contrast(t.upload, t.card_bg) >= 3.0);
+        // Still the palette's hue, not a different colour.
+        let (before, after) = (parse_hex("#6E3941").unwrap().to_hsva(), t.accent.to_hsva());
+        assert!(
+            (before.hue - after.hue).abs() < 2.0,
+            "{} -> {}",
+            before.hue,
+            after.hue
+        );
+        assert!(after.value > before.value);
+    }
+
+    #[test]
+    fn readable_colours_are_left_alone() {
+        let bg = Color::from_rgb_u8(0x18, 0x18, 0x1b);
+        let cyan = Color::from_rgb_u8(0x00, 0xf0, 0xff);
+        assert_eq!(with_contrast(cyan, bg, 4.5), cyan);
+        // On a light background a pale colour is darkened instead.
+        let white_bg = Color::from_rgb_u8(0xff, 0xff, 0xff);
+        let pale = Color::from_rgb_u8(0xff, 0xcc, 0xcc);
+        assert!(contrast(with_contrast(pale, white_bg, 4.5), white_bg) >= 4.5);
     }
 
     #[test]

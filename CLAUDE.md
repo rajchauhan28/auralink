@@ -48,10 +48,15 @@ Both talk to NetworkManager directly over D-Bus with zbus's blocking API. zbus i
 **UI wiring.** `build.rs` compiles `ui/wifi.slint` and `ui/bluetooth.slint` into `OUT_DIR`, and each binary `include!`s its generated module. A new `.slint` file must be added to `build.rs` (both the `compile` and the `rerun-if-changed` lines). Each binary's GUI follows the same pattern:
 - Slint callbacks spawn a `std::thread`, call the blocking backend, then hop back with `slint::invoke_from_event_loop` (the `set_status`/`apply_theme` helpers) using a `Weak` window handle. Never call a backend function on the UI thread.
 - Background threads poll and repaint:
-  - `auralink`: the network/VPN list every 10s, a Wi-Fi rescan on open, on refresh and every 60s, and the throughput graph every 200ms.
-  - `auralink-bt`: the device list every 5s, plus the auto-connect loop.
+  - `auralink`: the network/VPN list and radio state every 10s, a Wi-Fi rescan on open, on refresh and every 60s, and the throughput graph every 200ms.
+  - `auralink-bt`: the device list and adapter state every 5s, plus the auto-connect loop.
   - Both: the pywal watcher every 2s.
-- `ui/wifi.slint` declares `open_nmtui`, but no control invokes it.
+- An action that changes what a list shows (connect, disconnect, power, VPN, trust, …) calls `request_relist()` when it finishes. That wakes the list thread at once, so the window doesn't lag up to a poll interval behind the user. In `auralink`, `RESCAN_REQUESTED` (the refresh button) also forces a fresh Wi-Fi scan.
+- **Radio switches don't own their state.** The header radio buttons (`WifiRadioButton`, `RadioButton`) and the settings switches (`WifiSwitch`, `Switch`) only report the requested state. The window sets its `in-out` property for instant feedback, and the next poll corrects it if the action failed. A self-flipping toggle (`WifiThemeToggle`, kept for the VPN rows, whose model is rebuilt on every relist) overwrites its binding on the first click and then stops following the system. That would leave a radio switch wrong after airplane mode or a change made from outside.
+- Airplane mode isn't stored anywhere. `Radios::airplane_mode()` derives it as "Wi-Fi off and Bluetooth off or absent".
+- The Wi-Fi settings panel (the gear) holds Bluetooth, Airplane Mode, pywal, Import VPN and Open nmtui. The Bluetooth window's panel holds pywal. A previous commit (`5801ecf`) deleted both panels but left their Rust handlers behind, so check that a declared callback has a control before you assume it's reachable.
+- `open_in_terminal` runs nmtui in `$TERMINAL` if it is installed, else the first known terminal on `PATH`. A GUI has no TTY, so spawning nmtui directly shows nothing. The VPN file picker (`rfd`, xdg-portal backend) runs on a worker thread, because it blocks until the user picks a file.
+- `Theme::from_pywal` raises the accent and danger colours to 4.5:1 contrast against `card_bg` (`with_contrast`, keeping the hue). pywal's `color1` is often a dim shade; one real palette gave 2.2:1, which made the title, buttons and switches unreadable.
 - Each binary calls `slint::set_xdg_app_id` with the `StartupWMClass` from its `.desktop` file (`auralink`, `auralink-bt`). Without it the window has an empty app id, and docks and Hyprland rules can't match it.
 
 **CLI dispatch.** `handle_commands(args) -> Option<Result<(), String>>` in each binary: `None` opens the GUI, and `Err` is printed and exits 1. Each binary's usage text is a single `USAGE` const.
