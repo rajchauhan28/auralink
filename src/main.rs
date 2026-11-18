@@ -4,6 +4,7 @@ mod nm_backend;
 mod nm_dbus;
 
 use common::{AppConfig, Theme};
+use nm_backend::Rescan;
 use rfd::FileDialog;
 use serde_json::json;
 use slint::{Color, ComponentHandle, ModelRc, VecModel};
@@ -137,7 +138,7 @@ fn handle_commands(args: &[String]) -> Option<Result<(), String>> {
             Ok(())
         }
         "waybar-stream" => {
-            let out = match nm_backend::list_networks(false)
+            let out = match nm_backend::list_networks(Rescan::Cached)
                 .iter()
                 .find(|n| n.connected)
             {
@@ -155,13 +156,13 @@ fn handle_commands(args: &[String]) -> Option<Result<(), String>> {
         }
         "status" => {
             // Cached scan results: only the active connection is reported.
-            let (networks, vpns) = nm_backend::list_networks_and_vpns(false);
+            let (networks, vpns) = nm_backend::list_networks_and_vpns(Rescan::Cached);
             println!("{}", status_json(&networks, vpns));
             Ok(())
         }
         "fullstatus" => {
             // Lists available networks, so let nmcli refresh a stale scan.
-            let (networks, vpns) = nm_backend::list_networks_and_vpns(true);
+            let (networks, vpns) = nm_backend::list_networks_and_vpns(Rescan::IfStale);
             let status = status_json(&networks, vpns);
             println!(
                 "{}",
@@ -210,6 +211,30 @@ fn network_item(n: nm_backend::Network) -> WifiNetworkItem {
     }
 }
 
+/// Read the network and VPN lists (blocking) and hand them to the window.
+fn publish_networks(window: &slint::Weak<WifiWindow>, rescan: Rescan) {
+    let (mut networks, vpns) = nm_backend::list_networks_and_vpns(rescan);
+    for net in networks.iter_mut().filter(|n| n.connected) {
+        net.ping = nm_backend::get_ping("8.8.8.8");
+    }
+    let ww = window.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(ui) = ww.upgrade() {
+            let items: Vec<WifiNetworkItem> = networks.into_iter().map(network_item).collect();
+            let vpn_items: Vec<WifiVpnItem> = vpns
+                .into_iter()
+                .map(|v| WifiVpnItem {
+                    name: v.name.into(),
+                    active: v.active,
+                    type_name: v.vpn_type.into(),
+                })
+                .collect();
+            ui.set_networks(ModelRc::new(VecModel::from(items)));
+            ui.set_vpns(ModelRc::new(VecModel::from(vpn_items)));
+        }
+    });
+}
+
 fn main() -> Result<(), slint::PlatformError> {
     let args: Vec<String> = std::env::args().collect();
     if let Some(result) = handle_commands(&args) {
@@ -221,6 +246,9 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     let main_window = WifiWindow::new()?;
+    // Matches StartupWMClass in auralink.desktop; without it the window has
+    // no app id, so docks and compositor window rules cannot match it.
+    let _ = slint::set_xdg_app_id("auralink");
     let config = AppConfig::load(CONFIG_FILE);
     let pywal_enabled = Arc::new(AtomicBool::new(config.pywal_enabled));
     let force_refresh = Arc::new(AtomicBool::new(false));
@@ -522,40 +550,23 @@ fn main() -> Result<(), slint::PlatformError> {
     let window_weak = main_window.as_weak();
     let fr = force_refresh.clone();
     std::thread::spawn(move || {
-        // Scan on open, then every RESCAN_EVERY or when the user refreshes.
+        // Show the cached list at once; it can be minutes stale (after a
+        // resume or a move it may hold only the network in use), so follow
+        // it with a fresh scan. Rescan again every RESCAN_EVERY and when the
+        // user refreshes. A fresh scan blocks for seconds, hence this thread.
+        publish_networks(&window_weak, Rescan::Cached);
         let mut last_rescan: Option<Instant> = None;
         loop {
             // swap() first: behind a short-circuiting || it would leave a
             // pending refresh set and rescan twice.
             let forced = fr.swap(false, Ordering::SeqCst);
-            if forced || last_rescan.is_none_or(|t| t.elapsed() >= RESCAN_EVERY) {
-                nm_backend::trigger_rescan();
-                // Give the scan a moment to land before reading results.
-                std::thread::sleep(Duration::from_secs(3));
+            let rescan = if forced || last_rescan.is_none_or(|t| t.elapsed() >= RESCAN_EVERY) {
                 last_rescan = Some(Instant::now());
-            }
-
-            let (mut networks, vpns) = nm_backend::list_networks_and_vpns(false);
-            for net in networks.iter_mut().filter(|n| n.connected) {
-                net.ping = nm_backend::get_ping("8.8.8.8");
-            }
-            let ww = window_weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(ui) = ww.upgrade() {
-                    let items: Vec<WifiNetworkItem> =
-                        networks.into_iter().map(network_item).collect();
-                    let vpn_items: Vec<WifiVpnItem> = vpns
-                        .into_iter()
-                        .map(|v| WifiVpnItem {
-                            name: v.name.into(),
-                            active: v.active,
-                            type_name: v.vpn_type.into(),
-                        })
-                        .collect();
-                    ui.set_networks(ModelRc::new(VecModel::from(items)));
-                    ui.set_vpns(ModelRc::new(VecModel::from(vpn_items)));
-                }
-            });
+                Rescan::Fresh
+            } else {
+                Rescan::Cached
+            };
+            publish_networks(&window_weak, rescan);
 
             // Sleep, waking early if the user hits refresh.
             let until = Instant::now() + LIST_EVERY;

@@ -241,6 +241,9 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     let main_window = AppWindow::new()?;
+    // Matches StartupWMClass in auralink-bt.desktop; without it the window
+    // has no app id, so docks and compositor window rules cannot match it.
+    let _ = slint::set_xdg_app_id("auralink-bt");
     let config = AppConfig::load(CONFIG_FILE);
     let pywal_enabled = Arc::new(AtomicBool::new(config.pywal_enabled));
     main_window.set_pywal_enabled(config.pywal_enabled);
@@ -422,39 +425,21 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let window_weak = main_window.as_weak();
     main_window.on_refresh(move || {
-        let Some(ui) = window_weak.upgrade() else {
-            return;
-        };
-        ui.set_is_scanning(true);
-        ui.set_status_msg("SCANNING...".into());
         let handle = window_weak.clone();
-        std::thread::spawn(move || {
-            // Scanning is an explicit request, so switching the adapter on
-            // for it is what the user wants. (The daemon never does this.)
-            if !bt_backend::is_powered() {
-                let _ = bt_backend::set_power(true);
-            }
-            bt_backend::start_scan();
-            std::thread::sleep(Duration::from_secs(15));
-            bt_backend::stop_scan();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(ui) = handle.upgrade() {
-                    ui.set_is_scanning(false);
-                    ui.set_status_msg("READY".into());
-                }
-            });
-        });
+        // The refresh button is an explicit request to scan, so switching
+        // the adapter on for it is what the user wants.
+        std::thread::spawn(move || discover_devices(handle, true));
     });
 
-    // Initial scan on startup, once the window is up.
+    // Look for new devices on open, but only when that is free: opening the
+    // window must not undo Bluetooth-off or airplane mode, and discovery
+    // makes a connected A2DP stream stutter.
     let window_weak = main_window.as_weak();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(500));
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(ui) = window_weak.upgrade() {
-                ui.invoke_refresh();
-            }
-        });
+        let snap = bt_backend::Snapshot::read();
+        if snap.powered() && !snap.connected().any(|d| d.is_audio) {
+            discover_devices(window_weak, false);
+        }
     });
 
     // Auto-connect, for when the window runs without the daemon (e.g. no
@@ -507,7 +492,35 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
-    main_window.run()
+    let result = main_window.run();
+    // Closing the window mid-scan would otherwise orphan the bluetoothctl
+    // child, which keeps discovering until its own 60s timeout.
+    bt_backend::stop_scan();
+    result
+}
+
+/// Run a 15s discovery session, showing it in the window. Blocking: call it
+/// from a worker thread.
+fn discover_devices(window: slint::Weak<AppWindow>, power_on: bool) {
+    let ww = window.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(ui) = ww.upgrade() {
+            ui.set_is_scanning(true);
+            ui.set_status_msg("SCANNING...".into());
+        }
+    });
+    if power_on && !bt_backend::is_powered() {
+        let _ = bt_backend::set_power(true);
+    }
+    bt_backend::start_scan();
+    std::thread::sleep(Duration::from_secs(15));
+    bt_backend::stop_scan();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(ui) = window.upgrade() {
+            ui.set_is_scanning(false);
+            ui.set_status_msg("READY".into());
+        }
+    });
 }
 
 #[cfg(test)]

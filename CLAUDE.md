@@ -52,6 +52,7 @@ Both talk to NetworkManager directly over D-Bus with zbus's blocking API. zbus i
   - `auralink-bt`: the device list every 5s, plus the auto-connect loop.
   - Both: the pywal watcher every 2s.
 - `ui/wifi.slint` declares `open_nmtui`, but no control invokes it.
+- Each binary calls `slint::set_xdg_app_id` with the `StartupWMClass` from its `.desktop` file (`auralink`, `auralink-bt`). Without it the window has an empty app id, and docks and Hyprland rules can't match it.
 
 **CLI dispatch.** `handle_commands(args) -> Option<Result<(), String>>` in each binary: `None` opens the GUI, and `Err` is printed and exits 1. Each binary's usage text is a single `USAGE` const.
 
@@ -60,14 +61,17 @@ Both talk to NetworkManager directly over D-Bus with zbus's blocking API. zbus i
 - **Don't use `bluetoothctl --timeout N` for one-shot commands.** It waits the full N seconds even after the command finishes (measured: `--timeout 4 show` takes 4.0s; without it, 6 ms). It also exits 0 on failure. Use `busctl`, or `output_within(cmd, limit)` when bluetoothctl is unavoidable. The one legitimate `--timeout` use is the discovery session's length.
 - BlueZ reply texts change between versions. 5.88 says `Disconnection successful`, where older versions said `Successful disconnected`; matching the old text made every disconnect report failure. Prefer D-Bus exit status to text matching.
 - **Discovery is a tracked child** (`start_scan`/`stop_scan`/`scan_running` kill and reap it). Don't `pkill` by pattern or drop the `Child`. BlueZ discovery is per-client, so `bluetoothctl scan off` from a new process can't stop ours. Never run discovery while an audio device is connected, because it makes A2DP stutter.
-- **Never power the adapter on unattended.** Only the GUI's explicit refresh does that. The daemon used to undo Bluetooth-off and airplane mode.
+- **Never power the adapter on unattended.** Only the GUI's explicit refresh does that (`discover_devices(_, power_on: true)`). The daemon used to undo Bluetooth-off and airplane mode, and opening the window used to as well. The window's scan-on-open runs only if the adapter is already on and no audio device is connected. The window stops its scan when it closes, so the `bluetoothctl` child is not orphaned.
 - **Auto-connect policy lives in `autoconnect.rs`** (`AutoConnector::tick`), shared by `run_daemon()` and the GUI loop. The GUI loop stands down while `auralink-bt-daemon.service` is active and re-checks this on every pass.
   - It targets audio devices only (Icon `audio-*` or an A2DP-sink/HFP/HSP UUID), one at a time.
   - A device disconnected through `manual_disconnect` gets a marker under `$XDG_RUNTIME_DIR/auralink/bt-manual-disconnect/` and is skipped until `manual_connect`, pair or remove clears it. The marker is also cleared when the device is seen connected again, but only once it is more than 60s old.
   - User-initiated connect and disconnect must go through `manual_connect`/`manual_disconnect`, not the raw `bt_backend` calls.
 - Don't hardcode `hci0`: device and adapter object paths come from the snapshot.
 - `bluez-utils`, `pactl` and `notify-send` are optional at runtime. A missing tool must produce empty results or an error, never a panic. The release profile uses `panic = "abort"`, so a panic in any thread kills the app.
-- **Poll Wi-Fi with `--rescan no`.** nmcli's default `--rescan auto` blocks on a fresh scan whenever results are over 30s old. It made `auralink waybar-stream` take 5.5s and kept the radio scanning.
+- **Poll Wi-Fi with `--rescan no`.** nmcli's default `--rescan auto` blocks on a fresh scan whenever results are over 30s old. It made `auralink waybar-stream` take 5.5s and kept the radio scanning. Pass `nm_backend::Rescan`:
+  - `Cached` for anything polled.
+  - `Fresh` (nmcli `--rescan yes`, which waits 3-8s) when a current list is needed. The window shows the cached list first, then a `Fresh` one on open, on refresh and every 60s.
+  - Don't read the cache a fixed delay after `trigger_rescan`. Results land 4-6s after the request, and after a resume or a move the cache may hold only the network in use. That bug made the window list one network for about 14s.
 - `nmcli device disconnect` takes an interface name (e.g. `wlan0`), not a type such as `wifi`.
 - **Never put a secret on a command line.** Argv is world-readable via `/proc/<pid>/cmdline`. Wi-Fi passwords go through `nm_dbus`, never `nmcli ... password X` or `... psk X`. Reading secrets with `nmcli -s` is fine, because they arrive on stdout. Note that `nmcli -g` escapes `:` and `\` in values.
 

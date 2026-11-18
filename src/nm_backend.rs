@@ -71,21 +71,53 @@ fn is_ethernet(ctype: &str) -> bool {
     ctype == "802-3-ethernet" || ctype == "ethernet"
 }
 
-/// Wired connections that are up, then visible Wi-Fi networks, best first.
+/// How `nmcli device wifi list` treats NetworkManager's scan cache.
 ///
-/// `allow_rescan` = false reads NetworkManager's cached scan results.
-/// nmcli's default (`--rescan auto`) starts a new scan whenever the cache is
-/// older than 30s *and blocks until it finishes*; polled every 10s by the
-/// window and every few seconds by Waybar via `status`, that kept the radio
-/// scanning around the clock, which costs latency spikes on the live link.
-/// The window now requests scans itself (see trigger_rescan).
-pub fn list_networks(allow_rescan: bool) -> Vec<Network> {
-    networks_from(&connections(), allow_rescan)
+/// Polling must use `Cached`. nmcli's default (`--rescan auto`) starts a new
+/// scan whenever the cache is older than 30s *and blocks until it finishes*;
+/// polled every 10s by the window and every few seconds by Waybar, that kept
+/// the radio scanning around the clock and made `waybar-stream` take 5.5s.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Rescan {
+    /// Cached results only; never blocks.
+    Cached,
+    /// Rescan first if the cache is over 30s old (nmcli's default).
+    IfStale,
+    /// Rescan now and wait for the results: 3-8s. The cache can be minutes
+    /// stale after a resume or a move, and a scan's results land some
+    /// seconds after it is requested, so reading the cache a fixed few
+    /// seconds after `trigger_rescan` can still show only the network in use.
+    Fresh,
 }
 
-fn networks_from(conns: &[Connection], allow_rescan: bool) -> Vec<Network> {
-    let rescan = if allow_rescan { "auto" } else { "no" };
-    let rows: Vec<Vec<String>> = Command::new("nmcli")
+impl Rescan {
+    fn arg(self) -> &'static str {
+        match self {
+            Rescan::Cached => "no",
+            Rescan::IfStale => "auto",
+            Rescan::Fresh => "yes",
+        }
+    }
+}
+
+/// Wired connections that are up, then visible Wi-Fi networks, best first.
+pub fn list_networks(rescan: Rescan) -> Vec<Network> {
+    networks_from(&connections(), rescan)
+}
+
+fn networks_from(conns: &[Connection], rescan: Rescan) -> Vec<Network> {
+    let mut rows = wifi_rows(rescan);
+    // NetworkManager refuses scans in some states (e.g. right after another
+    // scan, or while the radio is busy), and nmcli then lists nothing.
+    // Cached results beat an empty list.
+    if rows.is_empty() && rescan != Rescan::Cached {
+        rows = wifi_rows(Rescan::Cached);
+    }
+    build_networks(conns, &rows)
+}
+
+fn wifi_rows(rescan: Rescan) -> Vec<Vec<String>> {
+    Command::new("nmcli")
         .args([
             "-t",
             "-f",
@@ -94,7 +126,7 @@ fn networks_from(conns: &[Connection], allow_rescan: bool) -> Vec<Network> {
             "wifi",
             "list",
             "--rescan",
-            rescan,
+            rescan.arg(),
         ])
         .output()
         .map(|o| {
@@ -104,8 +136,7 @@ fn networks_from(conns: &[Connection], allow_rescan: bool) -> Vec<Network> {
                 .filter(|p| p.len() >= 5)
                 .collect()
         })
-        .unwrap_or_default();
-    build_networks(conns, &rows)
+        .unwrap_or_default()
 }
 
 /// `rows` are parsed `nmcli -t -f SSID,BSSID,SIGNAL,SECURITY,IN-USE` lines.
@@ -194,9 +225,9 @@ pub struct VpnConnection {
 }
 
 /// Networks and VPNs from a single `nmcli connection show`.
-pub fn list_networks_and_vpns(allow_rescan: bool) -> (Vec<Network>, Vec<VpnConnection>) {
+pub fn list_networks_and_vpns(rescan: Rescan) -> (Vec<Network>, Vec<VpnConnection>) {
     let conns = connections();
-    (networks_from(&conns, allow_rescan), vpns_from(&conns))
+    (networks_from(&conns, rescan), vpns_from(&conns))
 }
 
 fn vpns_from(conns: &[Connection]) -> Vec<VpnConnection> {
